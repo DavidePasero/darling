@@ -1,0 +1,9 @@
+# FOR VECTORDB, REPLACE XXX WITH CUDA VERSION 
+faiss-gpu-XXX
+torch
+sentence_transformers
+datasets==2.16.0
+
+# FOR BUILDING flash-attention 2
+ninja
+packaging
