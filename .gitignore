@@ -1,2 +1,6 @@
 change_header.py
 dpo/
+*.sh
+logs/*
+outputs/*
+wandb/*

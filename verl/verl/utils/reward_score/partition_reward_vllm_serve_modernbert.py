@@ -11,11 +11,11 @@ import os
 # ──────────────────────────────────────────────────────────────────────────────
 # CONFIG – adjust HOSTNAME if needed
 # ──────────────────────────────────────────────────────────────────────────────
-HOSTNAME     = os.environ["VLLM_SERVER_HOSTNAME"]
-NUM_SERVERS  = 8
-SERVER_CFGS  = [
-    {"url": f"http://{HOSTNAME}:{8000+i}", "model": f"similarity_gpu_{i}"}
-    for i in range(NUM_SERVERS)
+HOSTNAME    = os.environ["VLLM_SERVER_HOSTNAME"]
+NUM_SERVERS = 1
+SERVER_CFGS = [
+    {"url": f"http://{HOSTNAME}:8000",
+     "model": "/home/scur1900/models/dogtooth"}
 ]
 
 THRESHOLD = 0.32       # decision boundary: “similar” if prob > 0.45
