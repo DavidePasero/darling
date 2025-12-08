@@ -1,0 +1,57 @@
+#!/bin/bash
+#SBATCH --job-name=athene_scoring
+#SBATCH --output=logs/athene_scoring_%j.out
+#SBATCH --error=logs/athene_scoring_%j.err
+#SBATCH --nodes=1
+#SBATCH --ntasks-per-node=1
+#SBATCH --gpus-per-node=1
+#SBATCH --cpus-per-task=8
+#SBATCH --mem=64GB
+#SBATCH --time=04:00:00
+#SBATCH --partition=learnfair
+
+# Create logs directory if it doesn't exist
+mkdir -p logs
+
+# Source environment
+source ~/.bashrc
+source ~/.zshrc
+conda init
+conda activate verlenv
+
+# Set environment variables
+export CUDA_VISIBLE_DEVICES=0
+
+# Configuration - EDIT THESE
+MODEL_PATH="/checkpoint/ram/tianjian/reward_models/Athene-RM-8B"
+INPUT_FILE="your_input_data.json"
+OUTPUT_FILE="rewards_output.json"
+BATCH_SIZE=16
+LOG_FILE="rewards_${SLURM_JOB_ID}.log"
+
+# Print configuration
+echo "==================================="
+echo "Athene Reward Scoring Job"
+echo "==================================="
+echo "Job ID: $SLURM_JOB_ID"
+echo "Node: $SLURM_NODELIST"
+echo "Model Path: $MODEL_PATH"
+echo "Input File: $INPUT_FILE"
+echo "Output File: $OUTPUT_FILE"
+echo "Batch Size: $BATCH_SIZE"
+echo "==================================="
+
+# Run the scoring script
+python score_athene_rewards.py \
+    --model-path "$MODEL_PATH" \
+    --input "$INPUT_FILE" \
+    --output "$OUTPUT_FILE" \
+    --batch-size $BATCH_SIZE \
+    --device auto \
+    --log-file "$LOG_FILE"
+
+echo "==================================="
+echo "Job completed"
+echo "Results saved to: $OUTPUT_FILE"
+echo "Logs saved to: $LOG_FILE"
+echo "==================================="
