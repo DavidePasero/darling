@@ -9,7 +9,7 @@ This dataset loads BEIR format queries and ensures they include:
 from typing import List, Union, Optional
 from torch.utils.data import Dataset
 from transformers import PreTrainedTokenizer, ProcessorMixin
-from omegaconf import DictConfig
+from omegaconf import DictConfig, ListConfig
 import torch
 import json
 import verl.utils.torch_functional as verl_F
@@ -46,20 +46,48 @@ class BeirRLDataset(Dataset):
         self.max_prompt_length = config.get("max_prompt_length", 512)
         self.truncation = config.get("truncation", "error")
 
-        queries_file = data_files if isinstance(data_files, str) else data_files[0]
+        if isinstance(data_files, str):
+            queries_file = data_files
+            qrels_file = None
+        elif isinstance(data_files, (list, ListConfig)):
+            queries_file = data_files[0]
+            qrels_file = data_files[1] if len(data_files) > 1 else None
+        else:
+            raise ValueError(f"data_files must be str or list, got {type(data_files)}")
 
         print(f"Loading BEIR queries from: {queries_file}")
 
-        self.queries = []
+        # Load all queries
+        all_queries = {}
         with open(queries_file, 'r') as f:
             for line in f:
                 query_data = json.loads(line)
-                self.queries.append({
-                    "query_id": query_data["_id"],
-                    "text": query_data["text"]
-                })
+                all_queries[query_data["_id"]] = query_data["text"]
 
-        print(f"Loaded {len(self.queries)} queries")
+        # Filter to only queries with labels in qrels (if qrels file is provided)
+        if qrels_file:
+            print(f"Filtering queries using qrels: {qrels_file}")
+
+            valid_query_ids = set()
+            with open(qrels_file, 'r') as f:
+                next(f)  # Skip header
+                for line in f:
+                    parts = line.strip().split('\t')
+                    if len(parts) >= 1:
+                        valid_query_ids.add(parts[0])
+
+            self.queries = [
+                {"query_id": qid, "text": text}
+                for qid, text in all_queries.items()
+                if qid in valid_query_ids
+            ]
+            print(f"Filtered to {len(self.queries)} queries with labels (from {len(all_queries)} total)")
+        else:
+            self.queries = [
+                {"query_id": qid, "text": text}
+                for qid, text in all_queries.items()
+            ]
+            print(f"Loaded {len(self.queries)} queries (no filtering)")
 
     def __len__(self):
         return len(self.queries)

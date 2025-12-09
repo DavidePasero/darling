@@ -1,41 +1,20 @@
-"""
-Abstract Base Retriever Class
-
-This module defines the interface that all retrievers must implement.
-This allows easy swapping between different retrieval backends (FAISS, BM25, etc.)
-while maintaining a consistent API for the reward manager.
-"""
-
 from abc import ABC, abstractmethod
 from typing import List, Tuple, Optional, Literal
+import pickle
 import numpy as np
 
 
 class BaseRetriever(ABC):
-    """
-    Abstract base class for retrieval systems.
-
-    All retriever implementations (FAISS, BM25, etc.) must inherit from this
-    class and implement the required methods.
-    """
 
     def __init__(
         self,
         id_mapping_path: Optional[str] = None,
         verbose: bool = True
     ):
-        """
-        Initialize base retriever.
-
-        Args:
-            id_mapping_path: Path to pickle file with document ID mapping
-            verbose: Print initialization messages
-        """
         self.verbose = verbose
         self.id_mapping = None
 
         if id_mapping_path:
-            import pickle
             if self.verbose:
                 print(f"Loading ID mapping: {id_mapping_path}")
             with open(id_mapping_path, 'rb') as f:

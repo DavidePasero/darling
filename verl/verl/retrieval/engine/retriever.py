@@ -1,36 +1,3 @@
-"""
-FAISS-based Dense Retriever
-
-This module provides a FAISS-based implementation of the BaseRetriever interface.
-
-Features:
-1. Encoding queries (batched, with proper model prompts)
-2. Retrieving documents using FAISS
-3. Handling multiple rewrites per query with union/intersection
-4. Returning both scores and document IDs
-
-Example Usage:
-    retriever = FaissRetriever(
-        faiss_index_path="msmarco.faiss",
-        embedding_model="Qwen/Qwen3-Embedding-0.6B",
-        id_mapping_path="id_mapping.pkl"
-    )
-
-    # Query rewrites: outer list = original queries, inner list = rewrites
-    queries = [
-        ["capital of france", "france capital city", "paris location"],  # 3 rewrites for query 1
-        ["deep learning", "neural networks", "ML algorithms"]  # 3 rewrites for query 2
-    ]
-
-    # Retrieve with union (combine all retrieved docs from rewrites)
-    results = retriever.retrieve_batch(queries, k=10, mode="union")
-
-    # results = [
-    #     {"doc_ids": [1, 5, 10, ...], "scores": [0.9, 0.85, ...]},  # For query 1
-    #     {"doc_ids": [2, 7, 15, ...], "scores": [0.88, 0.82, ...]}, # For query 2
-    # ]
-"""
-
 from typing import List, Literal, Optional, Tuple
 import numpy as np
 import torch
@@ -41,15 +8,6 @@ from .base_retriever import BaseRetriever
 
 
 class FaissRetriever(BaseRetriever):
-    """
-    Unified retriever combining FAISS index and embedding model.
-
-    Handles:
-    - Batched encoding of queries
-    - FAISS retrieval
-    - Multiple rewrites per query with union/intersection
-    - Document ID mapping
-    """
 
     def __init__(
         self,
@@ -69,33 +27,28 @@ class FaissRetriever(BaseRetriever):
             device: Device for embedding model ('cuda' or 'cpu')
             verbose: Print initialization messages
         """
+        super().__init__(id_mapping_path=id_mapping_path, verbose=verbose)
+
         self.device = device
-        self.verbose = verbose
         self.embedding_model_name = embedding_model
 
-        # Load embedding model
         if self.verbose:
             print(f"Loading embedding model: {embedding_model}")
 
-        model_args = {"trust_remote_code": True}
         self.embedding_model = SentenceTransformer(
             embedding_model,
             device=device,
-            **model_args
+            trust_remote_code=True
         )
         self.embedding_model.eval()
         self.dimension = self.embedding_model.get_sentence_embedding_dimension()
 
         if self.verbose:
             print(f"Model dimension: {self.dimension}")
-
-        # Load FAISS index
-        if self.verbose:
             print(f"Loading FAISS index: {faiss_index_path}")
 
         cpu_index = faiss.read_index(faiss_index_path)
 
-        # Move to GPU if available
         if device == "cuda" and torch.cuda.is_available():
             res = faiss.StandardGpuResources()
             co = faiss.GpuClonerOptions()
@@ -109,18 +62,8 @@ class FaissRetriever(BaseRetriever):
             if self.verbose:
                 print(f"Index on CPU: {self.index.ntotal} vectors")
 
-        # Load ID mapping (FAISS index -> real document IDs)
-        self.id_mapping = None
-        if id_mapping_path:
-            if self.verbose:
-                print(f"Loading ID mapping: {id_mapping_path}")
-            with open(id_mapping_path, 'rb') as f:
-                self.id_mapping = pickle.load(f)
-            if self.verbose:
-                print(f"Loaded {len(self.id_mapping)} document IDs")
-
         if self.verbose:
-            print(f"Retriever ready!\n")
+            print(f"FAISS Retriever ready!\n")
 
     def encode(
         self,
@@ -235,11 +178,8 @@ class FaissRetriever(BaseRetriever):
             nprobe: int = 64,
             batch_size: int = 128
     ):
-        # ----------------------------------------------------------
-        # 1. Flatten
-        # ----------------------------------------------------------
         flat_rewrites = []
-        mapping = []  # maps rewrite index -> (query_id, rewrite_id)
+        mapping = []
 
         for qi, rewrites in enumerate(query_rewrites):
             for ri, r in enumerate(rewrites):
@@ -249,9 +189,6 @@ class FaissRetriever(BaseRetriever):
         if len(flat_rewrites) == 0:
             return []
 
-        # ----------------------------------------------------------
-        # 2. Encode all rewrites in a single batch
-        # ----------------------------------------------------------
         scores_flat, index_flat = self.search(
             flat_rewrites,
             k=k,
@@ -261,9 +198,6 @@ class FaissRetriever(BaseRetriever):
 
         doc_ids_flat = self.map_indices_to_ids(index_flat)
 
-        # ----------------------------------------------------------
-        # 3. Regroup results
-        # ----------------------------------------------------------
         Q = len(query_rewrites)
         rewrite_results = [[] for _ in range(Q)]
 
@@ -273,13 +207,9 @@ class FaissRetriever(BaseRetriever):
                 "scores": scores_flat[flat_i]
             })
 
-        # ----------------------------------------------------------
-        # 4. Merge rewrites per query
-        # ----------------------------------------------------------
         results = []
 
         for qi, rewrites in enumerate(query_rewrites):
-
             if len(rewrites) == 0:
                 results.append({
                     "doc_ids": np.array([]),
@@ -311,7 +241,7 @@ class FaissRetriever(BaseRetriever):
                 merged_doc_ids = np.array([d for d, _ in sorted_docs[:k]])
                 merged_scores = np.array([s for _, s in sorted_docs[:k]])
 
-            else:  # union
+            else:
                 doc_to_scores = {}
                 for r in per_rw:
                     for doc_id, score in zip(r["doc_ids"], r["scores"]):
@@ -332,6 +262,14 @@ class FaissRetriever(BaseRetriever):
             })
 
         return results
+
+    def get_index_size(self) -> int:
+        """Get the number of documents in the FAISS index."""
+        return self.index.ntotal
+
+
+# Backward compatibility: allow importing as "Retriever"
+Retriever = FaissRetriever
 
 
 if __name__ == "__main__":

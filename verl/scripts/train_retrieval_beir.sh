@@ -7,17 +7,24 @@ set -x
 BEIR_DATASET="figa"
 BEIR_DIR="datasets/${BEIR_DATASET}"
 QUERIES_FILE="${BEIR_DIR}/queries.jsonl"
+TRAIN_QRELS="${BEIR_DIR}/qrels/train.tsv"
+DEV_QRELS="${BEIR_DIR}/qrels/dev.tsv"
 QRELS_FILE="qrels/train.tsv"
 
+RETRIEVER_TYPE="faiss"
 FAISS_INDEX="${BEIR_DIR}/faiss_index.faiss"
-ID_MAPPING="${BEIR_DIR}/id_mapping.pkl"
+FAISS_ID_MAPPING="${BEIR_DIR}/id_mapping.pkl"
 EMBEDDING_MODEL="Qwen/Qwen3-Embedding-0.6B"
+BM25_INDEX="${BEIR_DIR}/bm25_index/index"
+BM25_ID_MAPPING="${BEIR_DIR}/bm25_index/id_mapping.pkl"
+BM25_K1=0.9
+BM25_B=0.4
 
 MODEL_PATH="Qwen/Qwen2.5-0.5B"
-BATCH_SIZE=32
-N_REWRITES=4
+BATCH_SIZE=8
+N_REWRITES=2
 MAX_PROMPT_LEN=128
-MAX_RESPONSE_LEN=128
+MAX_RESPONSE_LEN=64
 LEARNING_RATE=1e-6
 EPOCHS=3
 
@@ -28,14 +35,23 @@ GPU_MEMORY_UTIL=0.4
 OFFLOAD_PARAMS=true
 OFFLOAD_OPTIMIZER=false
 
+if [ "${RETRIEVER_TYPE}" = "faiss" ]; then
+    ID_MAPPING="${FAISS_ID_MAPPING}"
+elif [ "${RETRIEVER_TYPE}" = "bm25" ]; then
+    ID_MAPPING="${BM25_ID_MAPPING}"
+else
+    echo "Error: RETRIEVER_TYPE must be 'faiss' or 'bm25'"
+    exit 1
+fi
+
 PROJECT_NAME="beir_retrieval"
-EXPERIMENT_NAME="${BEIR_DATASET}_quality_ndcg@${K}"
+EXPERIMENT_NAME="${BEIR_DATASET}_${RETRIEVER_TYPE}_${QUALITY_METHOD}@${K}"
 CHECKPOINT_DIR="./checkpoints/${PROJECT_NAME}/${EXPERIMENT_NAME}"
 
 python3 -m verl.trainer.main_ppo \
     algorithm.adv_estimator=grpo \
-    data.train_files=${QUERIES_FILE} \
-    data.val_files=${QUERIES_FILE} \
+    data.train_files="[${QUERIES_FILE},${TRAIN_QRELS}]" \
+    data.val_files="[${QUERIES_FILE},${DEV_QRELS}]" \
     +data.custom_cls.path=verl.utils.dataset.beir_dataset \
     +data.custom_cls.name=BeirRLDataset \
     data.train_batch_size=${BATCH_SIZE} \
@@ -45,8 +61,9 @@ python3 -m verl.trainer.main_ppo \
     data.filter_overlong_prompts=True \
     data.truncation='error' \
     actor_rollout_ref.model.path=${MODEL_PATH} \
-    actor_rollout_ref.model.use_remove_padding=True \
+    actor_rollout_ref.model.use_remove_padding=False \
     actor_rollout_ref.model.enable_gradient_checkpointing=True \
+    +actor_rollout_ref.model.use_flash_attn=False \
     actor_rollout_ref.actor.optim.lr=${LEARNING_RATE} \
     actor_rollout_ref.actor.ppo_mini_batch_size=${BATCH_SIZE} \
     actor_rollout_ref.actor.ppo_micro_batch_size_per_gpu=8 \
@@ -77,7 +94,11 @@ python3 -m verl.trainer.main_ppo \
     algorithm.norm_adv_by_std_in_grpo=False \
     reward_model.enable=False \
     reward_model.reward_manager=retrieval \
+    +reward_model.retriever_type=${RETRIEVER_TYPE} \
     +reward_model.faiss_index_path=${FAISS_INDEX} \
+    +reward_model.bm25_index_path=${BM25_INDEX} \
+    +reward_model.bm25_k1=${BM25_K1} \
+    +reward_model.bm25_b=${BM25_B} \
     +reward_model.id_mapping_path=${ID_MAPPING} \
     +reward_model.beir_dataset_path=${BEIR_DIR} \
     +reward_model.qrels_file=${QRELS_FILE} \

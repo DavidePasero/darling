@@ -2,13 +2,15 @@ from collections import defaultdict
 import torch
 from verl import DataProto
 
-from verl.retrieval.engine.retriever import Retriever
-from verl.retrieval.engine.document_dataset import DocumentDataset
+from verl.retrieval.engine.retriever import FaissRetriever
+from verl.retrieval.engine.bm25_retriever import Bm25Retriever
+from verl.retrieval.engine.base_retriever import BaseRetriever
+from verl.retrieval.engine.document_dataset import UnifiedDataset, BeirAdapter
 
 
 class RetrievalRewardManager:
     """
-    Reward manager for retrieval tasks with FAISS-based quality rewards.
+    Reward manager for retrieval tasks supporting both FAISS and BM25.
     Supports NDCG, Recall, Precision, and Hit metrics.
     """
 
@@ -18,13 +20,20 @@ class RetrievalRewardManager:
         num_examine,
         compute_score,
         reward_fn_key="data_source",
+        retriever_type="faiss",
+        # FAISS-specific parameters
         faiss_index_path=None,
+        embedding_model="Qwen/Qwen3-Embedding-0.6B",
+        # BM25-specific parameters
+        bm25_index_path=None,
+        bm25_k1=0.9,
+        bm25_b=0.4,
+        # Common parameters
         id_mapping_path=None,
         beir_dataset_path=None,
         qrels_file="qrels/train.tsv",
         quality_method="ndcg",
         k=10,
-        embedding_model="Qwen/Qwen3-Embedding-0.6B",
         device="cuda",
         **kwargs
     ):
@@ -36,14 +45,18 @@ class RetrievalRewardManager:
             num_examine: Number of examples to print during training
             compute_score: Reward computation function (not used)
             reward_fn_key: Key to access data source in non_tensor_batch
-            faiss_index_path: Path to FAISS index file
-            id_mapping_path: Path to pickle file with ID mapping
+            retriever_type: Type of retriever ('faiss' or 'bm25')
+            faiss_index_path: Path to FAISS index file (for FAISS retriever)
+            embedding_model: HuggingFace model for embeddings (for FAISS retriever)
+            bm25_index_path: Path to BM25/Pyserini index directory (for BM25 retriever)
+            bm25_k1: BM25 k1 parameter (default: 0.9)
+            bm25_b: BM25 b parameter (default: 0.4)
+            id_mapping_path: Path to pickle file with ID mapping (optional)
             beir_dataset_path: Path to BEIR dataset directory
             qrels_file: Relative path to qrels file (default: "qrels/train.tsv")
             quality_method: Metric to use ('ndcg', 'recall', 'precision', 'hit')
             k: Top-k for retrieval
-            embedding_model: HuggingFace model for embeddings
-            device: Device for models
+            device: Device for models (FAISS only)
         """
         self.tokenizer = tokenizer
         self.num_examine = num_examine
@@ -52,34 +65,50 @@ class RetrievalRewardManager:
         self.quality_method = quality_method
         self.k = k
         self.device = device
+        self.retriever_type = retriever_type.lower()
 
-        if faiss_index_path is None:
-            raise ValueError("faiss_index_path must be provided")
-        if id_mapping_path is None:
-            raise ValueError("id_mapping_path must be provided")
         if beir_dataset_path is None:
             raise ValueError("beir_dataset_path must be provided")
 
         print("=" * 80)
         print("Initializing RetrievalRewardManager")
         print("=" * 80)
+        print(f"Retriever type: {self.retriever_type}")
 
-        self.retriever = Retriever(
-            faiss_index_path=faiss_index_path,
-            embedding_model=embedding_model,
-            id_mapping_path=id_mapping_path,
-            device=device,
-            verbose=True
-        )
+        # Initialize retriever based on type
+        if self.retriever_type == "faiss":
+            if faiss_index_path is None:
+                raise ValueError("faiss_index_path must be provided for FAISS retriever")
 
-        from verl.retrieval.engine.document_dataset import BeirAdapter
+            self.retriever = FaissRetriever(
+                faiss_index_path=faiss_index_path,
+                embedding_model=embedding_model,
+                id_mapping_path=id_mapping_path,
+                device=device,
+                verbose=True
+            )
+
+        elif self.retriever_type == "bm25":
+            if bm25_index_path is None:
+                raise ValueError("bm25_index_path must be provided for BM25 retriever")
+
+            self.retriever = Bm25Retriever(
+                index_path=bm25_index_path,
+                k1=bm25_k1,
+                b=bm25_b,
+                id_mapping_path=id_mapping_path,
+                verbose=True
+            )
+
+        else:
+            raise ValueError(f"Unknown retriever_type: {retriever_type}. Must be 'faiss' or 'bm25'")
+
         adapter = BeirAdapter(data_path=beir_dataset_path, split="train")
         self.doc_dataset = adapter.to_unified()
 
-        if verbose := True:
-            print(f"Loaded {len(self.doc_dataset.qrels)} queries with relevance labels")
-
+        print(f"Loaded {len(self.doc_dataset.qrels)} queries with relevance labels")
         print(f"Quality reward: {quality_method}@{k}")
+        print(f"Index size: {self.retriever.get_index_size()} documents")
         print("=" * 80)
         print()
 
