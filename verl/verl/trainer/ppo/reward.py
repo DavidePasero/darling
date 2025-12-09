@@ -68,6 +68,10 @@ def load_reward_manager(config, tokenizer, num_examine, diversity=False, **rewar
         from verl.workers.reward_manager import DiversityRewardManager
 
         reward_manager_cls = DiversityRewardManager
+    elif reward_manager_name == "retrieval":
+        from verl.workers.reward_manager import RetrievalRewardManager
+
+        reward_manager_cls = RetrievalRewardManager
     else:
         raise NotImplementedError
 

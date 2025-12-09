@@ -4,10 +4,19 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
+<<<<<<< Updated upstream
 DARLING implements the paper "Jointly Reinforcing Diversity and Quality of Language Model Generations". This repository contains:
 - A modified version of **verl** (Volcano Engine Reinforcement Learning for LLMs) - a production-ready RL training library
 - Evaluation harnesses for creative writing, math tasks, and novelty benchmarks
 - Training scripts for both verifiable (math) and non-verifiable (wildchat) tasks
+=======
+DARLING is the official implementation of "Jointly Reinforcing Diversity and Quality of Language Model Generations". The project is built on top of **verl** (Volcano Engine Reinforcement Learning for LLMs), a flexible and efficient RL training framework for large language models.
+
+This repository contains:
+- **darling/**: Main implementation of the DARLING algorithm
+- **verl/**: Core RL training framework (verl library)
+- **evals/**: Evaluation benchmarks (novelty-bench, eqbench, math tasks, creative writing)
+>>>>>>> Stashed changes
 
 ## Environment Setup
 
@@ -21,6 +30,7 @@ conda activate verlenv
 ### Installing Dependencies
 
 ```bash
+<<<<<<< Updated upstream
 # Install PyTorch (tested on CUDA 12.8)
 pip install torch==2.7.1 torchvision==0.22.1 torchaudio==2.7.1 --index-url https://download.pytorch.org/whl/cu128
 
@@ -221,3 +231,267 @@ Test suites are organized in `verl/tests/`:
 - `verl/tests/special_standalone/` - Standalone component tests
 
 Run tests from the `verl/` directory.
+=======
+# Install PyTorch with CUDA 12.8
+pip install torch==2.7.1 torchvision==0.22.1 torchaudio==2.7.1 --index-url https://download.pytorch.org/whl/cu128
+
+# Install verl and dependencies
+cd verl
+pip install -e ./
+
+# Install FSDP-only setup (without Megatron)
+USE_MEGATRON=0 bash scripts/install_vllm_sglang_mcore.sh
+
+# Install vLLM
+pip install vllm==0.8.3
+
+# Install flash-attention
+pip3 install flash-attn --no-build-isolation
+```
+
+### Setting Up Wandb (Optional)
+
+```bash
+export WANDB_API_KEY=<your_api_key>
+```
+
+## Core Architecture
+
+### verl Framework Structure
+
+The verl framework follows a modular architecture with these key components:
+
+- **Workers** (`verl/workers/`): Distributed computation units
+  - `actor/`: Policy model training
+  - `rollout/`: Generation using vLLM/SGLang
+  - `critic/`: Value function training (for PPO)
+  - `reward_model/`: Reward model inference
+  - `reward_manager/`: Reward computation coordination
+
+- **Trainer** (`verl/trainer/`):
+  - `main_ppo.py`: Main entry point for PPO/GRPO training
+  - `main_generation.py`: Generation-only entry point
+  - `main_eval.py`: Evaluation entry point
+  - `ppo/`: PPO algorithm implementation
+  - `config/`: Hydra configuration files
+
+- **Models** (`verl/models/`):
+  - `llama/`, `qwen2/`: Model-specific implementations
+  - `transformers/`: HuggingFace Transformers backend
+  - `mcore/`: Megatron-LM backend
+
+- **Single Controller** (`verl/single_controller/`):
+  - `ray/`: Ray-based distributed training coordination
+  - Implements the hybrid-controller programming model
+
+- **Utils** (`verl/utils/`):
+  - `dataset/`: Data loading and processing
+  - `reward_score/`: Reward function implementations
+  - `checkpoint/`: Model checkpointing utilities
+  - `logger/`: Experiment tracking (wandb, tensorboard, etc.)
+
+### Data Flow
+
+1. **Prompts** → **Rollout Worker** (vLLM/SGLang) → **Responses**
+2. **Responses** → **Reward Manager** → **Rewards**
+3. **Trajectories + Rewards** → **Actor/Critic Workers** → **Updated Models**
+
+The framework uses `DataProto` (defined in `verl/protocol.py`) as the core data structure for passing data between workers.
+
+## Running DARLING
+
+### 1. Serve the Partition Classifier
+
+First, serve the partition classifier model on 8 GPUs:
+
+```bash
+bash serve_classifier.sh <PATH_TO_CLASSIFIER_HF>
+```
+
+This script launches 8 vLLM instances (one per GPU) on ports 8000-8007.
+
+### 2. Set Hostname Environment Variable
+
+```bash
+export VLLM_SERVER_HOSTNAME=<your_hostname>
+```
+
+Alternatively, manually edit the hostname in `verl/verl/utils/reward_score/partition_reward_vllm_serve.py`.
+
+### 3. Launch Training
+
+**For math tasks (verifiable):**
+```bash
+cd verl
+# Edit math_scripts/darling.batch to set your SCRATCH_DIR and paths
+# Submit via SLURM or run directly
+```
+
+**For non-verifiable tasks (e.g., WildChat):**
+```bash
+cd verl
+# Edit wildchat_scripts/darling.batch to set your data paths
+# Submit via SLURM or run directly
+```
+
+Both scripts use the main PPO trainer with:
+- `algorithm.adv_estimator=grpo` (GRPO algorithm)
+- `reward_model.reward_manager=diversity` (DARLING diversity reward)
+- Custom diversity function via `+reward_model.custom_diversity_function.path=...`
+
+## Common Commands
+
+### Training
+
+**PPO/GRPO Training:**
+```bash
+python3 -m verl.trainer.main_ppo \
+    algorithm.adv_estimator=grpo \
+    data.train_files=<train_data.parquet> \
+    data.val_files=<val_data.parquet> \
+    actor_rollout_ref.model.path=<model_path> \
+    [additional_config_overrides...]
+```
+
+**Supervised Fine-tuning:**
+```bash
+# See examples/sft/ for SFT examples
+python3 -m verl.trainer.fsdp_sft_trainer [config_overrides...]
+```
+
+### Generation Only
+
+```bash
+python3 -m verl.trainer.main_generation \
+    data.val_files=<data.parquet> \
+    actor_rollout_ref.model.path=<model_path> \
+    [additional_config_overrides...]
+```
+
+### Testing
+
+**Run CPU tests:**
+```bash
+pytest -v tests/**/test_*_on_cpu.py
+```
+
+**Run all unit tests:**
+```bash
+python -m pytest -m unit
+```
+
+**Run specific test categories:**
+- GPU unit tests: Tests without `on_cpu.py` suffix
+- Distributed tests: `tests/special_distributed/`
+- End-to-end tests: `tests/special_e2e/`
+- Sanity tests: `tests/special_sanity/`
+
+### Linting and Formatting
+
+```bash
+# Install pre-commit hooks
+pre-commit install
+
+# Run linting (uses ruff)
+ruff check .
+
+# Auto-format code
+ruff format .
+```
+
+## Configuration System
+
+The project uses Hydra for configuration management. Config files are in `verl/trainer/config/`.
+
+### Key Configuration Groups
+
+- **algorithm**: PPO, GRPO, REINFORCE++, RLOO, etc.
+- **data**: Dataset paths, batch sizes, sequence lengths
+- **actor_rollout_ref**: Actor model, rollout engine (vLLM/SGLang), reference model
+- **critic**: Critic model (for PPO with GAE)
+- **reward_model**: Reward model or reward manager configuration
+- **trainer**: Training hyperparameters, logging, checkpointing
+
+### Override Patterns
+
+```bash
+# Use dot notation for nested configs
+python3 -m verl.trainer.main_ppo \
+    trainer.total_epochs=10 \
+    actor_rollout_ref.actor.optim.lr=1e-6 \
+    actor_rollout_ref.rollout.name=vllm \
+    data.train_batch_size=256
+```
+
+### Adding New Config Fields
+
+Use `+` prefix to add new fields not in the base schema:
+```bash
++reward_model.custom_diversity_function.path=/path/to/reward.py \
++reward_model.custom_diversity_function.name=partition
+```
+
+## Development Patterns
+
+### Adding New Reward Functions
+
+1. Create a Python file with your reward function
+2. The function should accept prompts and responses
+3. Pass it via config:
+```bash
++custom_reward_function.path=/path/to/reward.py \
++custom_reward_function.name=my_reward_fn
+```
+
+### Backend Selection
+
+**Training backends:**
+- FSDP (default, recommended): `actor_rollout_ref.actor.strategy=fsdp`
+- FSDP2 (newer): `actor_rollout_ref.actor.strategy=fsdp2`
+- Megatron-LM: For large-scale MoE models (DeepSeek-671B, Qwen3-236B)
+
+**Inference backends:**
+- vLLM: `actor_rollout_ref.rollout.name=vllm`
+- SGLang: `actor_rollout_ref.rollout.name=sglang`
+
+### Memory Optimization
+
+Common memory-saving techniques:
+```bash
+# Enable gradient checkpointing
+actor_rollout_ref.model.enable_gradient_checkpointing=True
+
+# Offload parameters/optimizer
+actor_rollout_ref.actor.fsdp_config.param_offload=True
+actor_rollout_ref.actor.fsdp_config.optimizer_offload=True
+
+# Use remove padding for variable-length sequences
+actor_rollout_ref.model.use_remove_padding=True
+
+# Adjust GPU memory utilization for rollout
+actor_rollout_ref.rollout.gpu_memory_utilization=0.7
+```
+
+### Distributed Training
+
+The framework uses Ray for distributed coordination:
+- Set `trainer.n_gpus_per_node` and `trainer.nnodes`
+- For SLURM clusters, use the batch scripts in `math_scripts/` or `wildchat_scripts/` as templates
+- Ray head node is automatically configured in the batch scripts
+
+## Evaluation
+
+Evaluation scripts are in the `evals/` directory:
+
+- **Math evaluation**: `evals/math_evaluation/`
+- **Novelty-bench**: `evals/novelty-bench/`
+- **Creative writing**: `evals/creative-writing-bench/`
+
+## Important Notes
+
+- **vLLM version**: Use vLLM 0.8.x. Avoid 0.7.x (contains bugs causing OOMs).
+- **Data format**: Training data should be in Parquet format with a `prompt` key (configurable via `data.prompt_key`).
+- **Checkpoint compatibility**: Use `verl/tools/` for checkpoint conversion between formats.
+- **Multi-turn support**: See `examples/sglang_multiturn/` for multi-turn rollout examples.
+- **Sequence parallelism**: Supported via DeepSpeed Ulysses (`actor_rollout_ref.rollout.use_sp=True`).
+>>>>>>> Stashed changes
