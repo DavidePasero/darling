@@ -136,10 +136,21 @@ class BeirRLDataset(Dataset):
 
         position_ids = compute_position_id_with_mask(attention_mask)
 
+        # Encode raw prompt without padding for trainer compatibility
+        raw_prompt_ids = self.tokenizer.encode(raw_prompt, add_special_tokens=False)
+        if len(raw_prompt_ids) > self.max_prompt_length:
+            if self.truncation == "left":
+                raw_prompt_ids = raw_prompt_ids[-self.max_prompt_length:]
+            elif self.truncation == "right":
+                raw_prompt_ids = raw_prompt_ids[:self.max_prompt_length]
+            elif self.truncation == "error":
+                raise RuntimeError(f"Prompt length {len(raw_prompt_ids)} is longer than {self.max_prompt_length}.")
+
         return {
             "input_ids": input_ids[0],
             "attention_mask": attention_mask[0],
             "position_ids": position_ids[0],
+            "raw_prompt_ids": raw_prompt_ids,
             "uid": query_id,
             "query": query_text,
         }
