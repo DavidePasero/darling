@@ -4,6 +4,7 @@ from .base_prompt_extension import BasePromptExtender
 class RewritePromptExtender(BasePromptExtender):
     _REWRITE_SYSTEM_PROMPT = "You are a query rewriting assistant. Your task is to rewrite user queries to make them more effective for document retrieval."
     _REWRITE_USER_PROMPT = "Rewrite the following query:"
+    _NAME = "rewrite"
     
     def extend_prompt(self, prompt: str) -> str:
         return [
@@ -23,6 +24,7 @@ class SemanticRewritePromptExtender(BasePromptExtender):
     _REWRITE_USER_PROMPT = (
         "Please provide a semantically enriched rewrite of the following query:"
     )
+    _NAME = "semantic"
 
     def extend_prompt(self, prompt: str) -> str:
         return [
@@ -37,6 +39,7 @@ class SemanticRewritePromptExtender(BasePromptExtender):
 class MinimalRewritePromptExtender(BasePromptExtender):
     _REWRITE_SYSTEM_PROMPT = "Rewrite the user's query."
     _REWRITE_USER_PROMPT = "Query:"
+    _NAME = "minimal"
 
     def extend_prompt(self, prompt: str) -> str:
         return [
@@ -57,6 +60,7 @@ class ContextAwareRewritePromptExtender(BasePromptExtender):
     _REWRITE_USER_PROMPT = (
         "Rewrite the following query in a clearer and more retrieval-oriented way:"
     )
+    _NAME = "context_aware"
 
     def extend_prompt(self, prompt: str) -> str:
         return [
@@ -77,6 +81,7 @@ class BM25RewritePromptExtender(BasePromptExtender):
     _REWRITE_USER_PROMPT = (
         "Rewrite the query as BM25-optimized keywords (with optional synonyms):"
     )
+    _NAME = "bm25"
 
     def extend_prompt(self, prompt: str) -> str:
         return [
@@ -97,6 +102,7 @@ class DenseVectorRewritePromptExtender(BasePromptExtender):
     _REWRITE_USER_PROMPT = (
         "Rewrite the following query to improve semantic embedding quality:"
     )
+    _NAME = "dense_vector"
 
     def extend_prompt(self, prompt: str) -> str:
         return [
@@ -109,6 +115,8 @@ class DenseVectorRewritePromptExtender(BasePromptExtender):
 
 
 class NoOpPromptExtender(BasePromptExtender):
+    _NAME = "no_op"
+    
     def extend_prompt(self, prompt: str):
         return [
             {"role": "user", "content": prompt}

@@ -48,22 +48,12 @@ class BeirRLDataset(Dataset):
         self.max_prompt_length = config.get("max_prompt_length", 512)
         self.truncation = config.get("truncation", "error")
 
-        if prompt_extender == "rewrite":
-            self.prompt_extender = RewritePromptExtender()
-        elif prompt_extender == "semantic":
-            self.prompt_extender = SemanticRewritePromptExtender()
-        elif prompt_extender == "minimal":
-            self.prompt_extender = MinimalRewritePromptExtender()
-        elif prompt_extender == "context_aware":
-            self.prompt_extender = ContextAwareRewritePromptExtender()
-        elif prompt_extender == "bm25":
-            self.prompt_extender = BM25RewritePromptExtender()
-        elif prompt_extender == "dense_vector":
-            self.prompt_extender = DenseVectorRewritePromptExtender()
-        elif prompt_extender == "no_op":
-            self.prompt_extender = NoOpPromptExtender()
-        else:
+        self.prompt_extender = EXTENDER_REGISTRY.get(prompt_extender)
+
+        if self.prompt_extender is None:
             raise ValueError(f"Invalid prompt_extender: {prompt_extender}")
+        
+        self.prompt_extender = self.prompt_extender()
 
         print(f"Using prompt_extender: {prompt_extender}")
 
