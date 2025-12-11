@@ -1,4 +1,4 @@
-from .base_prompt_extension import BasePromptExtender
+from verl.utils.prompt_extension.base_prompt_extension import BasePromptExtender
 
 
 class RewritePromptExtender(BasePromptExtender):

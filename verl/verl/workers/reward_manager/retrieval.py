@@ -148,11 +148,29 @@ class RetrievalRewardManager:
             k=self.k
         )
 
+
         debug_log = os.environ.get("DEBUG_LOG", "0") == "1"
         if debug_log:
             print("\n" + "=" * 100)
             print("DEBUG: RETRIEVAL REWARD COMPUTATION")
             print("=" * 100)
+            
+            # Check for UID mismatches
+            missing_uids = []
+            for uid_val in uid:
+                if uid_val not in self.doc_dataset.queries:
+                    missing_uids.append(uid_val)
+            
+            if missing_uids:
+                print(f"\n⚠️  WARNING: {len(missing_uids)}/{len(uid)} UIDs not found in BEIR dataset!")
+                print(f"Missing UIDs (first 5): {missing_uids[:5]}")
+                print(f"\nAvailable query IDs in BEIR dataset (first 10):")
+                available_qids = list(self.doc_dataset.queries.keys())[:10]
+                for qid in available_qids:
+                    print(f"  - {qid}")
+                print(f"\nTotal queries in BEIR dataset: {len(self.doc_dataset.queries)}")
+                print("\n💡 TIP: Your training data UIDs must match the query IDs in your BEIR dataset.")
+                print("   Check that your parquet file's 'uid' column matches the BEIR queries.jsonl '_id' field.\n")
             
             for i in range(len(data)):
                 query_uid = uid[i]
@@ -170,6 +188,11 @@ class RetrievalRewardManager:
                 print(f"Sample {i+1}/{len(data)}")
                 print(f"{'─' * 100}")
                 print(f"UID: {query_uid}")
+                
+                if original_query == "N/A":
+                    print(f"⚠️  WARNING: UID '{query_uid}' not found in BEIR dataset!")
+                    print(f"   This UID will receive a reward of 0.0")
+                
                 print(f"\nOriginal Query: {original_query}")
                 print(f"\nGenerated Response (Rewritten Query):")
                 print(f"  {response_str}")
@@ -189,6 +212,8 @@ class RetrievalRewardManager:
             
             print("\n" + "=" * 100)
             print(f"Batch Summary: {len(data)} samples, Mean Reward: {sum(rewards)/len(rewards):.4f}")
+            if missing_uids:
+                print(f"⚠️  {len(missing_uids)} samples had missing UIDs and received 0.0 reward")
             print("=" * 100 + "\n")
 
         return rewards
