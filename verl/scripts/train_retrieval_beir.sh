@@ -23,7 +23,7 @@ BM25_ID_MAPPING="${BEIR_DIR}/bm25_index/id_mapping.pkl"
 BM25_K1=0.9
 BM25_B=0.4
 
-MODEL_PATH="Qwen/Qwen2.5-0.5B"
+MODEL_PATH="Qwen/Qwen2.5-0.5B-Instruct"
 BATCH_SIZE=8
 N_REWRITES=2
 MAX_PROMPT_LEN=128

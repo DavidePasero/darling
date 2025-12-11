@@ -126,7 +126,8 @@ class RetrievalRewardManager:
         prompt_ids = data.batch["prompts"]
         response_ids = data.batch["responses"]
         attention_mask = data.batch["attention_mask"]
-        uid = data.non_tensor_batch["uid"]
+        
+        query_ids = data.non_tensor_batch.get("query_id", data.non_tensor_batch.get("uid"))
 
         prompt_len = prompt_ids.shape[-1]
         valid_response_lengths = attention_mask[:, prompt_len:].sum(dim=-1)
@@ -142,7 +143,7 @@ class RetrievalRewardManager:
         retrieved_doc_ids = self.retriever.map_indices_to_ids(indices)
         
         rewards = self.doc_dataset.compute_rewards_batch(
-            query_uids=uid,
+            query_uids=query_ids,
             retrieved_doc_ids_batch=retrieved_doc_ids.tolist(),
             method=self.quality_method,
             k=self.k
@@ -155,43 +156,39 @@ class RetrievalRewardManager:
             print("DEBUG: RETRIEVAL REWARD COMPUTATION")
             print("=" * 100)
             
-            # Check for UID mismatches
-            missing_uids = []
-            for uid_val in uid:
-                if uid_val not in self.doc_dataset.queries:
-                    missing_uids.append(uid_val)
+            print(f"Query IDs in batch: {query_ids}")
+            print()
+
+            missing_qids = []
+            for qid in query_ids:
+                if qid not in self.doc_dataset.queries:
+                    missing_qids.append(qid)
             
-            if missing_uids:
-                print(f"\n⚠️  WARNING: {len(missing_uids)}/{len(uid)} UIDs not found in BEIR dataset!")
-                print(f"Missing UIDs (first 5): {missing_uids[:5]}")
+            if missing_qids:
+                print(f"\nWARNING: {len(missing_qids)}/{len(query_ids)} query IDs not found in BEIR dataset!")
+                print(f"Missing query IDs (first 5): {missing_qids[:5]}")
                 print(f"\nAvailable query IDs in BEIR dataset (first 10):")
                 available_qids = list(self.doc_dataset.queries.keys())[:10]
                 for qid in available_qids:
                     print(f"  - {qid}")
                 print(f"\nTotal queries in BEIR dataset: {len(self.doc_dataset.queries)}")
-                print("\n💡 TIP: Your training data UIDs must match the query IDs in your BEIR dataset.")
-                print("   Check that your parquet file's 'uid' column matches the BEIR queries.jsonl '_id' field.\n")
             
             for i in range(len(data)):
-                query_uid = uid[i]
+                query_id = query_ids[i]
                 response_str = responses_str[i]
                 retrieved_docs = retrieved_doc_ids[i].tolist() if hasattr(retrieved_doc_ids[i], 'tolist') else retrieved_doc_ids[i]
                 reward = rewards[i]
                 
-                # Get original query from dataset
-                original_query = self.doc_dataset.queries.get(query_uid, "N/A")
+                original_query = self.doc_dataset.queries.get(query_id, "N/A")
+                relevant_docs = self.doc_dataset.get_relevant_docs(query_id)
                 
-                # Get ground truth relevant docs
-                relevant_docs = self.doc_dataset.get_relevant_docs(query_uid)
-                
-                print(f"\n{'─' * 100}")
+                print(f"\n{'-' * 100}")
                 print(f"Sample {i+1}/{len(data)}")
-                print(f"{'─' * 100}")
-                print(f"UID: {query_uid}")
+                print(f"{'-' * 100}")
+                print(f"Query ID: {query_id}")
                 
                 if original_query == "N/A":
-                    print(f"⚠️  WARNING: UID '{query_uid}' not found in BEIR dataset!")
-                    print(f"   This UID will receive a reward of 0.0")
+                    print(f"WARNING: Query ID '{query_id}' not found in BEIR dataset!")
                 
                 print(f"\nOriginal Query: {original_query}")
                 print(f"\nGenerated Response (Rewritten Query):")
@@ -200,9 +197,8 @@ class RetrievalRewardManager:
                 
                 for rank, doc_id in enumerate(retrieved_docs[:self.k], 1):
                     doc_text = self.doc_dataset.corpus.get(doc_id, "N/A")
-                    # Truncate long documents
                     doc_text_truncated = doc_text[:200] + "..." if len(doc_text) > 200 else doc_text
-                    is_relevant = "✓ RELEVANT" if doc_id in relevant_docs else "✗ Not relevant"
+                    is_relevant = "RELEVANT" if doc_id in relevant_docs else "Not relevant"
                     print(f"  [{rank}] {doc_id} {is_relevant}")
                     print(f"      {doc_text_truncated}")
                 
@@ -212,8 +208,8 @@ class RetrievalRewardManager:
             
             print("\n" + "=" * 100)
             print(f"Batch Summary: {len(data)} samples, Mean Reward: {sum(rewards)/len(rewards):.4f}")
-            if missing_uids:
-                print(f"⚠️  {len(missing_uids)} samples had missing UIDs and received 0.0 reward")
+            if missing_qids:
+                print(f"{len(missing_qids)} samples had missing query IDs and received 0.0 reward")
             print("=" * 100 + "\n")
 
         return rewards

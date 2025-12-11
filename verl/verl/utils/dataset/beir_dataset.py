@@ -1,124 +1,65 @@
-"""
-BEIR Dataset for Query Rewriting with Retrieval Rewards
-
-This dataset loads BEIR format queries and ensures they include:
-- prompt: The original query text
-- uid: The query_id for looking up relevance labels
-"""
-
-from typing import List, Union, Optional
+from typing import Optional
 from torch.utils.data import Dataset
 from transformers import PreTrainedTokenizer, ProcessorMixin
-from omegaconf import DictConfig, ListConfig
-import torch
-import json
+from omegaconf import DictConfig
+import os
 import verl.utils.torch_functional as verl_F
 from verl.utils.model import compute_position_id_with_mask
-from verl.utils.prompt_extension import *
+from verl.utils.prompt_extension import EXTENDER_REGISTRY
 
 
 class BeirRLDataset(Dataset):
-    """
-    BEIR format dataset for query rewriting RL training.
-
-    Loads queries from BEIR queries.jsonl file.
-    """
+    """BEIR dataset for query rewriting RL training using UnifiedDataset."""
 
     def __init__(
         self,
-        data_files: Union[str, List[str]],
+        data_files,
         tokenizer: PreTrainedTokenizer,
         config: DictConfig,
         processor: Optional[ProcessorMixin] = None,
         prompt_extender: Optional[str] = "rewrite",
+        unified_dataset=None,
     ):
-        """
-        Initialize BEIR RL dataset.
-
-        Args:
-            data_files: Path to queries.jsonl file
-            tokenizer: Tokenizer for encoding queries
-            config: Dataset configuration
-            processor: Optional processor (not used for text-only)
-        """
+        if unified_dataset is None:
+            raise ValueError("unified_dataset is required. Pass UnifiedDataset from RetrievalRewardManager.")
+        
         self.tokenizer = tokenizer
         self.processor = processor
         self.config = config
+        self.unified_dataset = unified_dataset
 
         self.max_prompt_length = config.get("max_prompt_length", 512)
         self.truncation = config.get("truncation", "error")
 
         self.prompt_extender = EXTENDER_REGISTRY.get(prompt_extender)
 
+        print(f"Using prompt extender: {self.prompt_extender}")
+
         if self.prompt_extender is None:
             raise ValueError(f"Invalid prompt_extender: {prompt_extender}")
-        
         self.prompt_extender = self.prompt_extender()
 
-        print(f"Using prompt_extender: {prompt_extender}")
+        self.queries = [
+            {"query_id": qid, "text": text}
+            for qid, text in unified_dataset.queries.items()
+            if qid in unified_dataset.qrels
+        ]
+        
+        print(f"BeirRLDataset initialized with {len(self.queries)} queries")
+        print("*"*80)
+        print("Queries:")
+        for query in self.queries[:5]:
+            print(f"  {query['query_id']}: {query['text']}")
+        print()
 
-        if isinstance(data_files, str):
-            queries_file = data_files
-            qrels_file = None
-        elif isinstance(data_files, (list, ListConfig)):
-            queries_file = data_files[0]
-            qrels_file = data_files[1] if len(data_files) > 1 else None
-        else:
-            raise ValueError(f"data_files must be str or list, got {type(data_files)}")
-
-        print(f"Loading BEIR queries from: {queries_file}")
-
-        # Load all queries
-        all_queries = {}
-        with open(queries_file, 'r') as f:
-            for line in f:
-                query_data = json.loads(line)
-                all_queries[query_data["_id"]] = query_data["text"]
-
-        # Filter to only queries with labels in qrels (if qrels file is provided)
-        if qrels_file:
-            print(f"Filtering queries using qrels: {qrels_file}")
-
-            valid_query_ids = set()
-            with open(qrels_file, 'r') as f:
-                next(f)  # Skip header
-                for line in f:
-                    parts = line.strip().split('\t')
-                    if len(parts) >= 1:
-                        valid_query_ids.add(parts[0])
-
-            self.queries = [
-                {"query_id": qid, "text": text}
-                for qid, text in all_queries.items()
-                if qid in valid_query_ids
-            ]
-            print(f"Filtered to {len(self.queries)} queries with labels (from {len(all_queries)} total)")
-        else:
-            self.queries = [
-                {"query_id": qid, "text": text}
-                for qid, text in all_queries.items()
-            ]
-            print(f"Loaded {len(self.queries)} queries (no filtering)")
 
     def __len__(self):
         return len(self.queries)
 
     def __getitem__(self, idx):
-        """
-        Get a single item.
-
-        Returns dict with:
-            - input_ids: Tokenized query
-            - attention_mask: Attention mask
-            - position_ids: Position IDs
-            - uid: Query ID (for reward lookup)
-            - query: Original query text
-        """
         row = self.queries[idx]
-
         query_text = row["text"]
         query_id = row["query_id"]
-
         messages = self.prompt_extender.extend_prompt(query_text)
 
         raw_prompt = self.tokenizer.apply_chat_template(
@@ -127,18 +68,26 @@ class BeirRLDataset(Dataset):
             tokenize=False
         )
 
+        if os.getenv("DEBUG_LOG", "0") == "1":
+            print("Query: {query_text}")
+            print()
+            print("Messages:")
+            for message in messages:
+                print(message)
+            print()
+            print("Raw prompt:")
+            print(raw_prompt)
+            print()
+
         model_inputs = self.tokenizer(
             raw_prompt,
             return_tensors="pt",
             add_special_tokens=False
         )
 
-        input_ids = model_inputs["input_ids"]
-        attention_mask = model_inputs["attention_mask"]
-
         input_ids, attention_mask = verl_F.postprocess_data(
-            input_ids=input_ids,
-            attention_mask=attention_mask,
+            input_ids=model_inputs["input_ids"],
+            attention_mask=model_inputs["attention_mask"],
             max_length=self.max_prompt_length,
             pad_token_id=self.tokenizer.pad_token_id,
             left_pad=True,
@@ -147,7 +96,6 @@ class BeirRLDataset(Dataset):
 
         position_ids = compute_position_id_with_mask(attention_mask)
 
-        # Encode raw prompt without padding for trainer compatibility
         raw_prompt_ids = self.tokenizer.encode(raw_prompt, add_special_tokens=False)
         if len(raw_prompt_ids) > self.max_prompt_length:
             if self.truncation == "left":
@@ -155,7 +103,7 @@ class BeirRLDataset(Dataset):
             elif self.truncation == "right":
                 raw_prompt_ids = raw_prompt_ids[:self.max_prompt_length]
             elif self.truncation == "error":
-                raise RuntimeError(f"Prompt length {len(raw_prompt_ids)} is longer than {self.max_prompt_length}.")
+                raise RuntimeError(f"Prompt length {len(raw_prompt_ids)} exceeds {self.max_prompt_length}")
 
         return {
             "input_ids": input_ids[0],
@@ -163,5 +111,6 @@ class BeirRLDataset(Dataset):
             "position_ids": position_ids[0],
             "raw_prompt_ids": raw_prompt_ids,
             "uid": query_id,
+            "query_id": query_id,
             "query": query_text,
         }
