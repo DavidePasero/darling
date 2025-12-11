@@ -14,6 +14,7 @@ import torch
 import json
 import verl.utils.torch_functional as verl_F
 from verl.utils.model import compute_position_id_with_mask
+from verl.utils.prompt_extension import *
 
 
 class BeirRLDataset(Dataset):
@@ -29,6 +30,7 @@ class BeirRLDataset(Dataset):
         tokenizer: PreTrainedTokenizer,
         config: DictConfig,
         processor: Optional[ProcessorMixin] = None,
+        prompt_extender: Optional[str] = "rewrite",
     ):
         """
         Initialize BEIR RL dataset.
@@ -45,6 +47,25 @@ class BeirRLDataset(Dataset):
 
         self.max_prompt_length = config.get("max_prompt_length", 512)
         self.truncation = config.get("truncation", "error")
+
+        if prompt_extender == "rewrite":
+            self.prompt_extender = RewritePromptExtender()
+        elif prompt_extender == "semantic":
+            self.prompt_extender = SemanticRewritePromptExtender()
+        elif prompt_extender == "minimal":
+            self.prompt_extender = MinimalRewritePromptExtender()
+        elif prompt_extender == "context_aware":
+            self.prompt_extender = ContextAwareRewritePromptExtender()
+        elif prompt_extender == "bm25":
+            self.prompt_extender = BM25RewritePromptExtender()
+        elif prompt_extender == "dense_vector":
+            self.prompt_extender = DenseVectorRewritePromptExtender()
+        elif prompt_extender == "no_op":
+            self.prompt_extender = NoOpPromptExtender()
+        else:
+            raise ValueError(f"Invalid prompt_extender: {prompt_extender}")
+
+        print(f"Using prompt_extender: {prompt_extender}")
 
         if isinstance(data_files, str):
             queries_file = data_files
@@ -108,7 +129,7 @@ class BeirRLDataset(Dataset):
         query_text = row["text"]
         query_id = row["query_id"]
 
-        messages = [{"role": "user", "content": query_text}]
+        messages = self.prompt_extender.extend_prompt(query_text)
 
         raw_prompt = self.tokenizer.apply_chat_template(
             messages,

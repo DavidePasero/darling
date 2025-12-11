@@ -4,6 +4,7 @@ data:
   val_files: ~/data/rlhf/gsm8k/test.parquet
   prompt_key: prompt
   reward_fn_key: data_source
+  prompt_extender: no_op  # Options: no_op, rewrite, semantic, minimal, context_aware, bm25, dense_vector
   max_prompt_length: 512
   max_response_length: 512
   train_batch_size: 1024

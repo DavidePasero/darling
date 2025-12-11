@@ -4,6 +4,9 @@
 
 set -x
 
+# Enable Ray debug mode for breakpoint debugging (set to 0 for production)
+export RAY_DEBUG_MODE=0
+
 BEIR_DATASET="figa"
 BEIR_DIR="datasets/${BEIR_DATASET}"
 QUERIES_FILE="${BEIR_DIR}/queries.jsonl"

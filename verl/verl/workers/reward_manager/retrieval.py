@@ -1,4 +1,5 @@
 from collections import defaultdict
+import os
 import torch
 from verl import DataProto
 
@@ -104,7 +105,7 @@ class RetrievalRewardManager:
             raise ValueError(f"Unknown retriever_type: {retriever_type}. Must be 'faiss' or 'bm25'")
 
         adapter = BeirAdapter(data_path=beir_dataset_path, split="train")
-        self.doc_dataset = adapter.to_unified()
+        self.doc_dataset: UnifiedDataset = adapter.to_unified()
 
         print(f"Loaded {len(self.doc_dataset.qrels)} queries with relevance labels")
         print(f"Quality reward: {quality_method}@{k}")
@@ -139,13 +140,56 @@ class RetrievalRewardManager:
 
         scores, indices = self.retriever.search(responses_str, k=self.k, nprobe=64)
         retrieved_doc_ids = self.retriever.map_indices_to_ids(indices)
-
+        
         rewards = self.doc_dataset.compute_rewards_batch(
             query_uids=uid,
             retrieved_doc_ids_batch=retrieved_doc_ids.tolist(),
             method=self.quality_method,
             k=self.k
         )
+
+        debug_log = os.environ.get("DEBUG_LOG", "0") == "1"
+        if debug_log:
+            print("\n" + "=" * 100)
+            print("DEBUG: RETRIEVAL REWARD COMPUTATION")
+            print("=" * 100)
+            
+            for i in range(len(data)):
+                query_uid = uid[i]
+                response_str = responses_str[i]
+                retrieved_docs = retrieved_doc_ids[i].tolist() if hasattr(retrieved_doc_ids[i], 'tolist') else retrieved_doc_ids[i]
+                reward = rewards[i]
+                
+                # Get original query from dataset
+                original_query = self.doc_dataset.queries.get(query_uid, "N/A")
+                
+                # Get ground truth relevant docs
+                relevant_docs = self.doc_dataset.get_relevant_docs(query_uid)
+                
+                print(f"\n{'─' * 100}")
+                print(f"Sample {i+1}/{len(data)}")
+                print(f"{'─' * 100}")
+                print(f"UID: {query_uid}")
+                print(f"\nOriginal Query: {original_query}")
+                print(f"\nGenerated Response (Rewritten Query):")
+                print(f"  {response_str}")
+                print(f"\nRetrieved Documents (Top-{self.k}):")
+                
+                for rank, doc_id in enumerate(retrieved_docs[:self.k], 1):
+                    doc_text = self.doc_dataset.corpus.get(doc_id, "N/A")
+                    # Truncate long documents
+                    doc_text_truncated = doc_text[:200] + "..." if len(doc_text) > 200 else doc_text
+                    is_relevant = "✓ RELEVANT" if doc_id in relevant_docs else "✗ Not relevant"
+                    print(f"  [{rank}] {doc_id} {is_relevant}")
+                    print(f"      {doc_text_truncated}")
+                
+                print(f"\nGround Truth Relevant Docs: {relevant_docs[:10]}" + ("..." if len(relevant_docs) > 10 else ""))
+                print(f"Num Relevant Docs: {len(relevant_docs)}")
+                print(f"\n{self.quality_method.upper()}@{self.k} Reward: {reward:.4f}")
+            
+            print("\n" + "=" * 100)
+            print(f"Batch Summary: {len(data)} samples, Mean Reward: {sum(rewards)/len(rewards):.4f}")
+            print("=" * 100 + "\n")
 
         return rewards
 

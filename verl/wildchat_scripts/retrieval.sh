@@ -20,6 +20,10 @@ VAL_DATA="/path/to/msmarco_dev.parquet"
 MODEL_PATH="Qwen/Qwen2.5-0.5B"  # Or your preferred model
 EMBEDDING_MODEL="Qwen/Qwen3-Embedding-8B"
 
+# Prompt Extension Configuration
+# Options: no_op, rewrite, semantic, minimal, context_aware, bm25, dense_vector
+PROMPT_EXTENDER="dense_vector"  # Optimized for dense vector retrieval
+
 # Reward Configuration
 QUALITY_METHOD="ndcg"  # Options: ndcg, recall, hit
 K=10
@@ -35,6 +39,7 @@ python3 -m verl.trainer.main_ppo \
     data.train_files=${TRAIN_DATA} \
     data.val_files=${VAL_DATA} \
     data.prompt_key="prompt" \
+    data.prompt_extender=${PROMPT_EXTENDER} \
     data.train_batch_size=${B} \
     data.max_prompt_length=128 \
     data.max_response_length=${L} \

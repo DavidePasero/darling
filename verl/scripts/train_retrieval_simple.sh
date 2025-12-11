@@ -21,6 +21,12 @@ MODEL_PATH="Qwen/Qwen2.5-0.5B"  # Small model for single GPU
 EMBEDDING_MODEL="Qwen/Qwen3-Embedding-0.6B"  # For FAISS retrieval
 
 #==============================================================================
+# Prompt Extension Configuration
+#==============================================================================
+# Options: no_op, rewrite, semantic, minimal, context_aware, bm25, dense_vector
+PROMPT_EXTENDER="dense_vector"  # Optimized for dense vector retrieval
+
+#==============================================================================
 # Training Hyperparameters (optimized for single GPU)
 #==============================================================================
 BATCH_SIZE=32
@@ -60,6 +66,7 @@ python3 -m verl.trainer.main_ppo \
     data.train_files=${TRAIN_DATA} \
     data.val_files=${VAL_DATA} \
     data.prompt_key="prompt" \
+    data.prompt_extender=${PROMPT_EXTENDER} \
     data.train_batch_size=${BATCH_SIZE} \
     data.val_batch_size=16 \
     data.max_prompt_length=${MAX_PROMPT_LEN} \

@@ -54,7 +54,10 @@ def main(config):
 def run_ppo(config) -> None:
     if not ray.is_initialized():
         # this is for local ray cluster
+        # Set local_mode=True for debugging (all Ray actors run in same process)
+        debug_mode = os.environ.get("RAY_DEBUG_MODE", "0") == "1"
         ray.init(
+            local_mode=debug_mode,
             runtime_env={"env_vars": {"TOKENIZERS_PARALLELISM": "true", "NCCL_DEBUG": "WARN", "VLLM_LOGGING_LEVEL": "WARN"}},
             num_cpus=config.ray_init.num_cpus,
         )
@@ -200,12 +203,24 @@ def create_rl_dataset(data_paths, data_config, tokenizer, processor):
         dataset_cls = RLHFDataset
     print(f"Using dataset class: {dataset_cls.__name__}")
 
-    dataset = dataset_cls(
-        data_files=data_paths,
-        tokenizer=tokenizer,
-        processor=processor,
-        config=data_config,
-    )
+    # Prepare dataset kwargs
+    dataset_kwargs = {
+        "data_files": data_paths,
+        "tokenizer": tokenizer,
+        "processor": processor,
+        "config": data_config,
+    }
+    
+    # Add prompt_extender if it exists in config and dataset supports it
+    if hasattr(data_config, "prompt_extender") and data_config.prompt_extender is not None:
+        # Check if the dataset class accepts prompt_extender parameter
+        import inspect
+        sig = inspect.signature(dataset_cls.__init__)
+        if "prompt_extender" in sig.parameters:
+            dataset_kwargs["prompt_extender"] = data_config.prompt_extender
+            print(f"Using prompt_extender: {data_config.prompt_extender}")
+
+    dataset = dataset_cls(**dataset_kwargs)
 
     return dataset
 
