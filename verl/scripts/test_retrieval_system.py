@@ -38,12 +38,12 @@ def test_retrieval(
             faiss_index_path=faiss_index_path,
             embedding_model=embedding_model,
             id_mapping_path=id_mapping_path,
-            device=device,
+            device="cpu",
             verbose=True
         )
         nprobe = 64
     else:
-        bm25_index_path = f"{beir_dataset_path}/bm25_index"
+        bm25_index_path = f"{beir_dataset_path}/bm25_index/index"
         id_mapping_path = f"{beir_dataset_path}/id_mapping.pkl"
         
         retriever = Bm25Retriever(
@@ -60,11 +60,9 @@ def test_retrieval(
     sample_query_ids = list(doc_dataset.qrels.keys())[:10]
     sample_queries = [doc_dataset.queries[qid] for qid in sample_query_ids]
 
-    if retriever_type == "faiss":
-        scores, indices = retriever.search(sample_queries, k=k, nprobe=nprobe)
-    else:
-        scores, indices = retriever.search(sample_queries, k=k)
-    
+
+    scores, indices = retriever.search(sample_queries, k=k, nprobe=nprobe)
+
     retrieved_doc_ids_batch = retriever.map_indices_to_ids(indices).tolist()
 
     ndcg_rewards = doc_dataset.compute_rewards_batch(
@@ -123,8 +121,8 @@ def test_retrieval(
 
 def main():
     parser = argparse.ArgumentParser(description="Test retrieval system")
-    parser.add_argument("--beir-dataset", required=True, help="Path to BEIR dataset")
-    parser.add_argument("--retriever-type", default="faiss", choices=["faiss", "bm25"], help="Retriever type")
+    parser.add_argument("--beir-dataset", default="datasets/fiqa", help="Path to BEIR dataset")
+    parser.add_argument("--retriever-type", default="bm25", choices=["faiss", "bm25"], help="Retriever type")
     parser.add_argument("--embedding-model", default="Qwen/Qwen3-Embedding-0.6B", help="Embedding model")
     parser.add_argument("--device", default="cuda", choices=["cuda", "cpu"], help="Device")
     parser.add_argument("--k", type=int, default=10, help="Top-k retrieval")

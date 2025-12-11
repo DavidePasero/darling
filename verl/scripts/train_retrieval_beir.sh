@@ -9,8 +9,7 @@ export RAY_DEBUG_MODE=0
 
 BEIR_DATASET="figa"
 BEIR_DIR="datasets/${BEIR_DATASET}"
-QUERIES_FILE="${BEIR_DIR}/queries.jsonl"
-TRAIN_QRELS="${BEIR_DIR}/qrels/train.tsv"
+9TRAIN_QRELS="${BEIR_DIR}/qrels/train.tsv"
 DEV_QRELS="${BEIR_DIR}/qrels/dev.tsv"
 QRELS_FILE="qrels/train.tsv"
 

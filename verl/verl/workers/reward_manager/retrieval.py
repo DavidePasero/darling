@@ -22,20 +22,20 @@ class RetrievalRewardManager:
         compute_score,
         reward_fn_key="data_source",
         retriever_type="faiss",
-        # FAISS-specific parameters
         faiss_index_path=None,
         embedding_model="Qwen/Qwen3-Embedding-0.6B",
-        # BM25-specific parameters
+        embedding_mode="local",
+        vllm_server_url=None,
         bm25_index_path=None,
         bm25_k1=0.9,
         bm25_b=0.4,
-        # Common parameters
         id_mapping_path=None,
         beir_dataset_path=None,
         qrels_file="qrels/train.tsv",
         quality_method="ndcg",
         k=10,
         device="cuda",
+        faiss_device="cpu",
         **kwargs
     ):
         """
@@ -57,7 +57,8 @@ class RetrievalRewardManager:
             qrels_file: Relative path to qrels file (default: "qrels/train.tsv")
             quality_method: Metric to use ('ndcg', 'recall', 'precision', 'hit')
             k: Top-k for retrieval
-            device: Device for models (FAISS only)
+            device: Device for embedding model (default: cuda)
+            faiss_device: Device for FAISS index (default: cpu)
         """
         self.tokenizer = tokenizer
         self.num_examine = num_examine
@@ -66,6 +67,7 @@ class RetrievalRewardManager:
         self.quality_method = quality_method
         self.k = k
         self.device = device
+        self.faiss_device = faiss_device
         self.retriever_type = retriever_type.lower()
 
         if beir_dataset_path is None:
@@ -86,6 +88,9 @@ class RetrievalRewardManager:
                 embedding_model=embedding_model,
                 id_mapping_path=id_mapping_path,
                 device=device,
+                index_device=faiss_device,
+                embedding_mode=embedding_mode,
+                vllm_server_url=vllm_server_url,
                 verbose=True
             )
 

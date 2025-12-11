@@ -3,6 +3,8 @@ import numpy as np
 import torch
 from sentence_transformers import SentenceTransformer
 import faiss
+import asyncio
+import aiohttp
 
 from .base_retriever import BaseRetriever
 
@@ -14,7 +16,10 @@ class FaissRetriever(BaseRetriever):
         faiss_index_path: str,
         embedding_model: str = "Qwen/Qwen3-Embedding-0.6B",
         id_mapping_path: Optional[str] = None,
+        index_device: str = "cpu",
         device: str = "cuda",
+        embedding_mode: str = "local",
+        vllm_server_url: Optional[str] = None,
         verbose: bool = True
     ):
         """
@@ -24,46 +29,86 @@ class FaissRetriever(BaseRetriever):
             faiss_index_path: Path to FAISS index file (.faiss)
             embedding_model: HuggingFace model name for embeddings
             id_mapping_path: Path to pickle file with document ID mapping
+            index_device: Device for FAISS index ('cuda' or 'cpu')
             device: Device for embedding model ('cuda' or 'cpu')
+            embedding_mode: 'local' or 'vllm'
+            vllm_server_url: URL for vLLM server (required if embedding_mode='vllm')
             verbose: Print initialization messages
         """
         super().__init__(id_mapping_path=id_mapping_path, verbose=verbose)
 
         self.device = device
         self.embedding_model_name = embedding_model
+        self.embedding_mode = embedding_mode
+        self.vllm_server_url = vllm_server_url
 
-        if self.verbose:
-            print(f"Loading embedding model: {embedding_model}")
+        if embedding_mode == "vllm":
+            if vllm_server_url is None:
+                raise ValueError("vllm_server_url required for embedding_mode='vllm'")
+            
+            if verbose:
+                print(f"Using vLLM server: {vllm_server_url}")
+                print(f"Embedding model: {embedding_model}")
+            
+            self.embedding_model = None
+            self.dimension = 1536
+            
+        else:
+            if verbose:
+                print(f"Loading embedding model locally: {embedding_model}")
 
-        self.embedding_model = SentenceTransformer(
-            embedding_model,
-            device=device,
-            trust_remote_code=True
-        )
-        self.embedding_model.eval()
-        self.dimension = self.embedding_model.get_sentence_embedding_dimension()
+            self.embedding_model = SentenceTransformer(
+                embedding_model,
+                device=device,
+                trust_remote_code=True
+            )
+            self.embedding_model.eval()
+            self.dimension = self.embedding_model.get_sentence_embedding_dimension()
 
-        if self.verbose:
-            print(f"Model dimension: {self.dimension}")
+            if verbose:
+                print(f"Model dimension: {self.dimension}")
+
+        if verbose:
             print(f"Loading FAISS index: {faiss_index_path}")
 
         cpu_index = faiss.read_index(faiss_index_path)
 
-        if device == "cuda" and torch.cuda.is_available():
+        if index_device == "cuda" and torch.cuda.is_available():
             res = faiss.StandardGpuResources()
             co = faiss.GpuClonerOptions()
             co.useFloat16 = True
             co.useFloat16LookupTables = True
             self.index = faiss.index_cpu_to_gpu(res, 0, cpu_index, co)
-            if self.verbose:
+            if verbose:
                 print(f"Index on GPU: {self.index.ntotal} vectors")
         else:
             self.index = cpu_index
-            if self.verbose:
+            if verbose:
                 print(f"Index on CPU: {self.index.ntotal} vectors")
 
         if self.verbose:
             print(f"FAISS Retriever ready!\n")
+
+    async def _encode_vllm_async(self, texts: List[str], batch_size: int = 64) -> np.ndarray:
+        async def fetch_batch(session, batch_texts):
+            async with session.post(
+                f"{self.vllm_server_url}/v1/embed",
+                json={"model": self.embedding_model_name, "input": batch_texts},
+                timeout=aiohttp.ClientTimeout(total=60)
+            ) as response:
+                response.raise_for_status()
+                data = await response.json()
+                return [item["embedding"] for item in data["data"]]
+
+        batches = [texts[i:i + batch_size] for i in range(0, len(texts), batch_size)]
+        
+        async with aiohttp.ClientSession() as session:
+            tasks = [fetch_batch(session, batch) for batch in batches]
+            results = await asyncio.gather(*tasks)
+        
+        embeddings = np.array([emb for batch_result in results for emb in batch_result], dtype="float32")
+        norms = np.linalg.norm(embeddings, axis=1, keepdims=True)
+        return embeddings / norms
 
     def encode(
         self,
@@ -84,21 +129,25 @@ class FaissRetriever(BaseRetriever):
         Returns:
             np.ndarray of shape (len(texts), dimension)
         """
-        encode_kwargs = {
-            "batch_size": batch_size,
-            "show_progress_bar": show_progress,
-            "convert_to_numpy": True,
-            "normalize_embeddings": True,
-        }
+        if self.embedding_mode == "vllm":
+            return asyncio.run(self._encode_vllm_async(texts, batch_size))
+            
+        else:
+            encode_kwargs = {
+                "batch_size": batch_size,
+                "show_progress_bar": show_progress,
+                "convert_to_numpy": True,
+                "normalize_embeddings": True,
+            }
 
-        # Use query prompt for Qwen models
-        if is_query and "Qwen" in self.embedding_model_name:
-            encode_kwargs["prompt_name"] = "query"
-        elif is_query and "bge" in self.embedding_model_name:
-            texts = [f"Represent this sentence for searching relevant passages: {t}" for t in texts]
+            # Use query prompt for Qwen models
+            if is_query and "Qwen" in self.embedding_model_name:
+                encode_kwargs["prompt_name"] = "query"
+            elif is_query and "bge" in self.embedding_model_name:
+                texts = [f"Represent this sentence for searching relevant passages: {t}" for t in texts]
 
-        embeddings = self.embedding_model.encode(texts, **encode_kwargs)
-        return embeddings.astype("float32")
+            embeddings = self.embedding_model.encode(texts, **encode_kwargs)
+            return embeddings.astype("float32")
 
     def search(
         self,
@@ -140,10 +189,7 @@ class FaissRetriever(BaseRetriever):
         # Search
         scores, indices = self.index.search(query_embeddings, k)
 
-        if return_scores:
-            return scores, indices
-        else:
-            return indices
+        return (scores, indices) if return_scores else indices
 
     def map_indices_to_ids(self, indices: np.ndarray) -> np.ndarray:
         """

@@ -16,14 +16,16 @@ class RewritePromptExtender(BasePromptExtender):
         return f"RewritePromptExtender: {self._REWRITE_SYSTEM_PROMPT}\n{self._REWRITE_USER_PROMPT}"
 
 class SemanticRewritePromptExtender(BasePromptExtender):
+    _NAME = "semantic_rewrite"
+
     _REWRITE_SYSTEM_PROMPT = (
-        "You are an expert in semantic query reformulation. "
-        "Your task is to enhance user queries by expanding them with meaningful "
-        "concepts, entities, and synonyms that improve retrieval performance."
+        "You are an expert in semantic query reformulation. Enhance the query using "
+        "meaningful concepts and synonyms. Consider generating several candidates "
+        "if helpful. Only return the rewritten queries with "
+        "no explanations, no lists, and no additional text. Be creative and add menaingful extensions.."
     )
-    _REWRITE_USER_PROMPT = (
-        "Please provide a semantically enriched rewrite of the following query:"
-    )
+    _REWRITE_USER_PROMPT = "Rewrite the following query in a semantically enriched way. Only return the extended query. The existing query is:"
+
     _NAME = "semantic"
 
     def extend_prompt(self, prompt: str) -> str:
@@ -37,7 +39,11 @@ class SemanticRewritePromptExtender(BasePromptExtender):
 
 
 class MinimalRewritePromptExtender(BasePromptExtender):
-    _REWRITE_SYSTEM_PROMPT = "Rewrite the user's query."
+    _NAME = "minimal_rewrite"
+
+    _REWRITE_SYSTEM_PROMPT = (
+        "Rewrite the user's query. ONLY return the rewritten query—no lists, no reasoning."
+    )
     _REWRITE_USER_PROMPT = "Query:"
     _NAME = "minimal"
 
@@ -52,14 +58,12 @@ class MinimalRewritePromptExtender(BasePromptExtender):
 
 
 class ContextAwareRewritePromptExtender(BasePromptExtender):
-    _REWRITE_SYSTEM_PROMPT = (
-        "You are a context-aware query rewriting assistant. "
-        "Rewrite user queries so they become clearer, more specific, and more effective "
-        "for information retrieval, while strictly preserving the user’s intent."
-    )
-    _REWRITE_USER_PROMPT = (
-        "Rewrite the following query in a clearer and more retrieval-oriented way:"
-    )
+    REWRITE_SYSTEM_PROMPT = (
+        "Rewrite the query to be clearer, more specific, and more effective for retrieval. "
+        "If the input is complex, you may consider multiple rewrite options."
+        "Only return the rewritten queries with "
+        "no explanations, no lists, and no additional text. Be creative and add menaingful extensions."    )
+    _REWRITE_USER_PROMPT = "Rewrite the following query in a more context-aware way:"
     _NAME = "context_aware"
 
     def extend_prompt(self, prompt: str) -> str:
@@ -73,13 +77,13 @@ class ContextAwareRewritePromptExtender(BasePromptExtender):
 
 class BM25RewritePromptExtender(BasePromptExtender):
     _REWRITE_SYSTEM_PROMPT = (
-        "You rewrite user queries specifically for BM25 retrieval. "
-        "BM25 benefits from keyword-rich queries. "
-        "Rewrite the query by extracting the essential keywords, adding useful synonyms, "
-        "and removing unnecessary words while preserving intent."
+        "Rewrite the query optimized for BM25 retrieval. Produce a keyword-rich version "
+        "with relevant synonyms. You may internally generate several alternatives if the "
+        "query is long. Only return the rewritten queries with "
+        "no explanations, no lists, and no additional text. Be creative and add menaingful extensions."
     )
     _REWRITE_USER_PROMPT = (
-        "Rewrite the query as BM25-optimized keywords (with optional synonyms):"
+        "Rewrite the following query as BM25-optimized keywords:"
     )
     _NAME = "bm25"
 
@@ -94,13 +98,12 @@ class BM25RewritePromptExtender(BasePromptExtender):
 
 class DenseVectorRewritePromptExtender(BasePromptExtender):
     _REWRITE_SYSTEM_PROMPT = (
-        "You rewrite queries for dense vector semantic search. "
-        "Dense search works best when the query expresses clear intent, context, and meaning. "
-        "Rewrite the query to make it more explicit, semantically rich, and unambiguous, "
-        "without altering the user's intent."
+        "Rewrite the query for dense vector semantic search. Make it explicit, unambiguous, "
+        "and semantically rich. If helpful, consider multiple internal rewrites. Only return the rewritten queries with "
+        "no explanations, no lists, and no additional text. Be creative and add menaingful extensions."
     )
     _REWRITE_USER_PROMPT = (
-        "Rewrite the following query to improve semantic embedding quality:"
+        "Rewrite the following query for improved semantic embedding quality:"
     )
     _NAME = "dense_vector"
 
@@ -115,12 +118,15 @@ class DenseVectorRewritePromptExtender(BasePromptExtender):
 
 
 class NoOpPromptExtender(BasePromptExtender):
-    _NAME = "no_op"
-    
+    _NAME = "noop_rewrite"
+
+    _REWRITE_SYSTEM_PROMPT = (
+        "Return the query exactly as given. Do not modify it. ONLY return the query text."
+    )
+    _REWRITE_USER_PROMPT = "Query:"
+
     def extend_prompt(self, prompt: str):
         return [
-            {"role": "user", "content": prompt}
+            {"role": "system", "content": self._REWRITE_SYSTEM_PROMPT},
+            {"role": "user", "content": self._REWRITE_USER_PROMPT + " " + prompt},
         ]
-
-    def __repr__(self) -> str:
-        return "NoOpPromptExtender (wraps prompt in a single user message)"

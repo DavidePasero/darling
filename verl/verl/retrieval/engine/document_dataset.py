@@ -29,7 +29,7 @@ class UnifiedDataset:
         rel = set(self.get_relevant_docs(query_id))
         if not rel:
             return 0.0
-        docs_k = docs[:k]
+        docs_k = [str(x) for x in docs[:k]]
         dcg = sum(1.0 / math.log2(i + 2) for i, d in enumerate(docs_k) if d in rel)
         ideal = min(len(rel), len(docs_k))
         return dcg / self.idcg[ideal] if ideal > 0 else 0.0
@@ -38,18 +38,18 @@ class UnifiedDataset:
         rel = set(self.get_relevant_docs(query_id))
         if not rel:
             return 0.0
-        return len(set(docs[:k]) & rel) / len(rel)
+        return len(set([str(x) for x in docs[:k]]) & rel) / len(rel)
 
     def compute_precision(self, query_id: str, docs: List[str], k: int = 10) -> float:
         docs_k = docs[:k]
         if not docs_k:
             return 0.0
         rel = set(self.get_relevant_docs(query_id))
-        return sum(d in rel for d in docs_k) / len(docs_k)
+        return sum(d in rel for d in [str(x) for x in docs[:k]]) / len(docs_k)
 
     def compute_hit(self, query_id: str, docs: List[str], k: int = 10) -> float:
         rel = set(self.get_relevant_docs(query_id))
-        return 1.0 if any(d in rel for d in docs[:k]) else 0.0
+        return 1.0 if any(d in rel for d in [str(x) for x in docs[:k]]) else 0.0
 
     def compute_rewards_batch(
         self,
