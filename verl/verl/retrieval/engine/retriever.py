@@ -5,16 +5,19 @@ from sentence_transformers import SentenceTransformer
 import faiss
 import asyncio
 import aiohttp
+import pickle
+import os
 
-from .base_retriever import BaseRetriever
+from base_retriever import BaseRetriever
 
 
 class FaissRetriever(BaseRetriever):
 
     def __init__(
         self,
-        faiss_index_path: str,
-        embedding_model: str = "Qwen/Qwen3-Embedding-0.6B",
+        dataset: Optional[str] = None,
+        faiss_index_path: Optional[str] = None,
+        embedding_model: Optional[str] = None,
         id_mapping_path: Optional[str] = None,
         index_device: str = "cpu",
         device: str = "cuda",
@@ -26,9 +29,10 @@ class FaissRetriever(BaseRetriever):
         Initialize retriever with FAISS index and embedding model.
 
         Args:
-            faiss_index_path: Path to FAISS index file (.faiss)
+            dataset: Preset dataset name ('fiqua' or 'msmarco')
+            faiss_index_path: Path to FAISS index file (.faiss) or embeddings (.npy)
             embedding_model: HuggingFace model name for embeddings
-            id_mapping_path: Path to pickle file with document ID mapping
+            id_mapping_path: Path to pickle or text file with document ID mapping
             index_device: Device for FAISS index ('cuda' or 'cpu')
             device: Device for embedding model ('cuda' or 'cpu')
             embedding_mode: 'local' or 'vllm'
@@ -37,10 +41,51 @@ class FaissRetriever(BaseRetriever):
         """
         super().__init__(id_mapping_path=id_mapping_path, verbose=verbose)
 
+        # Handle dataset presets
+        if dataset:
+            if dataset.lower() == "msmarco":
+                faiss_index_path = faiss_index_path or "/home/scur1900/scratch_shared/msmarco/faiss/index"
+                id_mapping_path = id_mapping_path or "/home/scur1900/scratch_shared/msmarco/faiss/docid"
+                embedding_model = embedding_model or "BAAI/bge-base-en-v1.5"
+            elif dataset.lower() == "fiqua":
+                faiss_index_path = faiss_index_path or "/home/scur1900/scratch_shared/fiqa/faiss_index/embeddings_cache.npy"
+                id_mapping_path = id_mapping_path or "/home/scur1900/scratch_shared/fiqa/bm25_index/id_mapping.pkl"
+                embedding_model = embedding_model or "Qwen/Qwen3-Embedding-0.6B"
+            else:
+                if verbose:
+                    print(f"Warning: Unknown dataset '{dataset}'. Please specify paths manually.")
+
+        # Set defaults if not provided and not set by dataset
+        embedding_model = embedding_model or "Qwen/Qwen3-Embedding-0.6B"
+        
+        if not faiss_index_path:
+            raise ValueError("faiss_index_path must be provided or set via 'dataset' argument")
+
         self.device = device
         self.embedding_model_name = embedding_model
         self.embedding_mode = embedding_mode
         self.vllm_server_url = vllm_server_url
+        self.id_mapping_path = id_mapping_path
+
+        # Load ID mapping if provided
+        self.id_mapping = None
+        if self.id_mapping_path and os.path.exists(self.id_mapping_path):
+            if verbose:
+                print(f"Loading ID mapping: {self.id_mapping_path}")
+            
+            try:
+                # Try pickle first
+                with open(self.id_mapping_path, 'rb') as f:
+                    self.id_mapping = pickle.load(f)
+            except Exception:
+                # Fallbck to text file (line-separated IDs)
+                if verbose:
+                    print(f"Pickle load failed, trying text mode for: {self.id_mapping_path}")
+                with open(self.id_mapping_path, 'r') as f:
+                    self.id_mapping = [line.strip() for line in f]
+            
+            if verbose:
+                print(f"Loaded {len(self.id_mapping)} document IDs")
 
         if embedding_mode == "vllm":
             if vllm_server_url is None:
@@ -71,7 +116,15 @@ class FaissRetriever(BaseRetriever):
         if verbose:
             print(f"Loading FAISS index: {faiss_index_path}")
 
-        cpu_index = faiss.read_index(faiss_index_path)
+        if faiss_index_path.endswith('.npy'):
+            if verbose:
+                print("Detected .npy file, building Flat index from embeddings...")
+            embeddings = np.load(faiss_index_path)
+            dimension = embeddings.shape[1]
+            cpu_index = faiss.IndexFlatIP(dimension)
+            cpu_index.add(embeddings)
+        else:
+            cpu_index = faiss.read_index(faiss_index_path)
 
         if index_device == "cuda" and torch.cuda.is_available():
             res = faiss.StandardGpuResources()
@@ -175,8 +228,8 @@ class FaissRetriever(BaseRetriever):
         # Set nprobe parameter
         if hasattr(self.index, 'nprobe'):
             self.index.nprobe = nprobe
-        else:
-            # For GPU index
+        elif hasattr(faiss, 'GpuParameterSpace') and hasattr(self.index, 'getResources'):
+             # For GPU index check if GpuParameterSpace exists (faiss-gpu) and index is GPU backed
             faiss.GpuParameterSpace().set_index_parameter(self.index, "nprobe", nprobe)
 
         # Encode queries

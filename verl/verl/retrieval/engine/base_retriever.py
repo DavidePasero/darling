@@ -17,8 +17,16 @@ class BaseRetriever(ABC):
         if id_mapping_path:
             if self.verbose:
                 print(f"Loading ID mapping: {id_mapping_path}")
-            with open(id_mapping_path, 'rb') as f:
-                self.id_mapping = pickle.load(f)
+            
+            try:
+                with open(id_mapping_path, 'rb') as f:
+                    self.id_mapping = pickle.load(f)
+            except Exception:
+                if self.verbose:
+                    print(f"Pickle load failed, trying text mode for: {id_mapping_path}")
+                with open(id_mapping_path, 'r') as f:
+                    self.id_mapping = [line.strip() for line in f]
+
             if self.verbose:
                 print(f"Loaded {len(self.id_mapping)} document IDs")
 
