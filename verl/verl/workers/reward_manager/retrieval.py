@@ -7,6 +7,7 @@ from verl.retrieval.engine.retriever import FaissRetriever
 from verl.retrieval.engine.bm25_retriever import Bm25Retriever
 from verl.retrieval.engine.base_retriever import BaseRetriever
 from verl.retrieval.engine.document_dataset import UnifiedDataset, BeirAdapter
+from FlagEmbedding import FlagReranker
 
 
 class RetrievalRewardManager:
@@ -36,7 +37,7 @@ class RetrievalRewardManager:
         quality_method="ndcg",
         k=10,
         device="cuda",
-        **kwargs
+        **kwargs,
     ):
         """
         Initialize retrieval reward manager.
@@ -55,7 +56,7 @@ class RetrievalRewardManager:
             id_mapping_path: Path to pickle file with ID mapping (optional)
             beir_dataset_path: Path to BEIR dataset directory
             qrels_file: Relative path to qrels file (default: "qrels/train.tsv")
-            quality_method: Metric to use ('ndcg', 'recall', 'precision', 'hit')
+            quality_method: Metric to use ('ndcg', 'recall', 'precision', 'hit', 'reranker')
             k: Top-k for retrieval
             device: Device for models (FAISS only)
         """
@@ -64,6 +65,9 @@ class RetrievalRewardManager:
         self.compute_score = compute_score
         self.reward_fn_key = reward_fn_key
         self.quality_method = quality_method
+
+        self.reranker_url = kwargs.get("reranker_url", "http://localhost:8000/v1/score")
+
         self.k = k
         self.device = device
         self.retriever_type = retriever_type.lower()
@@ -86,7 +90,7 @@ class RetrievalRewardManager:
                 embedding_model=embedding_model,
                 id_mapping_path=id_mapping_path,
                 device=device,
-                verbose=True
+                verbose=True,
             )
 
         elif self.retriever_type == "bm25":
@@ -94,11 +98,7 @@ class RetrievalRewardManager:
                 raise ValueError("bm25_index_path must be provided for BM25 retriever")
 
             self.retriever = Bm25Retriever(
-                index_path=bm25_index_path,
-                k1=bm25_k1,
-                b=bm25_b,
-                id_mapping_path=id_mapping_path,
-                verbose=True
+                index_path=bm25_index_path, k1=bm25_k1, b=bm25_b, id_mapping_path=id_mapping_path, verbose=True
             )
 
         else:
@@ -126,7 +126,7 @@ class RetrievalRewardManager:
         prompt_ids = data.batch["prompts"]
         response_ids = data.batch["responses"]
         attention_mask = data.batch["attention_mask"]
-        
+
         query_ids = data.non_tensor_batch.get("query_id", data.non_tensor_batch.get("uid"))
 
         prompt_len = prompt_ids.shape[-1]
@@ -141,21 +141,21 @@ class RetrievalRewardManager:
 
         scores, indices = self.retriever.search(responses_str, k=self.k, nprobe=64)
         retrieved_doc_ids = self.retriever.map_indices_to_ids(indices)
-        
+
         rewards = self.doc_dataset.compute_rewards_batch(
             query_uids=query_ids,
             retrieved_doc_ids_batch=retrieved_doc_ids.tolist(),
             method=self.quality_method,
-            k=self.k
+            k=self.k,
+            reranker_url=self.reranker_url,
         )
-
 
         debug_log = os.environ.get("DEBUG_LOG", "0") == "1"
         if debug_log:
             print("\n" + "=" * 100)
             print("DEBUG: RETRIEVAL REWARD COMPUTATION")
             print("=" * 100)
-            
+
             print(f"Query IDs in batch: {query_ids}")
             print()
 
@@ -163,7 +163,7 @@ class RetrievalRewardManager:
             for qid in query_ids:
                 if qid not in self.doc_dataset.queries:
                     missing_qids.append(qid)
-            
+
             if missing_qids:
                 print(f"\nWARNING: {len(missing_qids)}/{len(query_ids)} query IDs not found in BEIR dataset!")
                 print(f"Missing query IDs (first 5): {missing_qids[:5]}")
@@ -172,42 +172,46 @@ class RetrievalRewardManager:
                 for qid in available_qids:
                     print(f"  - {qid}")
                 print(f"\nTotal queries in BEIR dataset: {len(self.doc_dataset.queries)}")
-            
+
             for i in range(len(data)):
                 query_id = query_ids[i]
                 response_str = responses_str[i]
-                retrieved_docs = retrieved_doc_ids[i].tolist() if hasattr(retrieved_doc_ids[i], 'tolist') else retrieved_doc_ids[i]
+                retrieved_docs = (
+                    retrieved_doc_ids[i].tolist() if hasattr(retrieved_doc_ids[i], "tolist") else retrieved_doc_ids[i]
+                )
                 reward = rewards[i]
-                
+
                 original_query = self.doc_dataset.queries.get(query_id, "N/A")
                 relevant_docs = self.doc_dataset.get_relevant_docs(query_id)
-                
+
                 print(f"\n{'-' * 100}")
-                print(f"Sample {i+1}/{len(data)}")
+                print(f"Sample {i + 1}/{len(data)}")
                 print(f"{'-' * 100}")
                 print(f"Query ID: {query_id}")
-                
+
                 if original_query == "N/A":
                     print(f"WARNING: Query ID '{query_id}' not found in BEIR dataset!")
-                
+
                 print(f"\nOriginal Query: {original_query}")
                 print(f"\nGenerated Response (Rewritten Query):")
                 print(f"  {response_str}")
                 print(f"\nRetrieved Documents (Top-{self.k}):")
-                
-                for rank, doc_id in enumerate(retrieved_docs[:self.k], 1):
+
+                for rank, doc_id in enumerate(retrieved_docs[: self.k], 1):
                     doc_text = self.doc_dataset.corpus.get(doc_id, "N/A")
                     doc_text_truncated = doc_text[:200] + "..." if len(doc_text) > 200 else doc_text
                     is_relevant = "RELEVANT" if doc_id in relevant_docs else "Not relevant"
                     print(f"  [{rank}] {doc_id} {is_relevant}")
                     print(f"      {doc_text_truncated}")
-                
-                print(f"\nGround Truth Relevant Docs: {relevant_docs[:10]}" + ("..." if len(relevant_docs) > 10 else ""))
+
+                print(
+                    f"\nGround Truth Relevant Docs: {relevant_docs[:10]}" + ("..." if len(relevant_docs) > 10 else "")
+                )
                 print(f"Num Relevant Docs: {len(relevant_docs)}")
                 print(f"\n{self.quality_method.upper()}@{self.k} Reward: {reward:.4f}")
-            
+
             print("\n" + "=" * 100)
-            print(f"Batch Summary: {len(data)} samples, Mean Reward: {sum(rewards)/len(rewards):.4f}")
+            print(f"Batch Summary: {len(data)} samples, Mean Reward: {sum(rewards) / len(rewards):.4f}")
             if missing_qids:
                 print(f"{len(missing_qids)} samples had missing query IDs and received 0.0 reward")
             print("=" * 100 + "\n")
@@ -232,7 +236,7 @@ class RetrievalRewardManager:
         prompt_len = prompt_ids.shape[-1]
         attention_mask = data.batch["attention_mask"]
         valid_response_lengths = attention_mask[:, prompt_len:].sum(dim=-1)
-        data_sources = data.non_tensor_batch.get(self.reward_fn_key, ['retrieval'] * len(data))
+        data_sources = data.non_tensor_batch.get(self.reward_fn_key, ["retrieval"] * len(data))
 
         scores = self.verify(data)
         rewards = []
@@ -246,14 +250,8 @@ class RetrievalRewardManager:
 
             data_source = data_sources[i]
             if already_printed.get(data_source, 0) < self.num_examine:
-                response_str = self.tokenizer.decode(
-                    data.batch["responses"][i][:length],
-                    skip_special_tokens=True
-                )
-                prompt_str = self.tokenizer.decode(
-                    data.batch["prompts"][i],
-                    skip_special_tokens=True
-                )
+                response_str = self.tokenizer.decode(data.batch["responses"][i][:length], skip_special_tokens=True)
+                prompt_str = self.tokenizer.decode(data.batch["prompts"][i], skip_special_tokens=True)
                 uid_val = data.non_tensor_batch["uid"][i]
 
                 print("=" * 80)
@@ -270,9 +268,6 @@ class RetrievalRewardManager:
         data.batch["acc"] = torch.tensor(rewards, dtype=torch.float32, device=prompt_ids.device)
 
         if return_dict:
-            return {
-                "reward_tensor": reward_tensor,
-                "reward_extra_info": reward_extra_info
-            }
+            return {"reward_tensor": reward_tensor, "reward_extra_info": reward_extra_info}
         else:
             return reward_tensor

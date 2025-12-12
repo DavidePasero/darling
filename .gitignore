@@ -5,3 +5,5 @@ WORKFLOW.md
 *.index
 
 *datasets/
+evals/*
+.vscode/*
