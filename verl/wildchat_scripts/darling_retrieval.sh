@@ -8,9 +8,9 @@ export RERANKER_PORT=8000
 B=4
 N=2
 L=128
-RETRIEVAL_REWARD_METHOD="reranker"
+RETRIEVAL_REWARD_METHOD="reranker+ndcg"
 
-if [ "$RETRIEVAL_REWARD_METHOD" == "reranker" ]; then
+if [[ "$RETRIEVAL_REWARD_METHOD" == *"reranker"* ]]; then
     # ---------------------------------------------------------
     # 1. Start Reranker Server (Background Process)
     # ---------------------------------------------------------

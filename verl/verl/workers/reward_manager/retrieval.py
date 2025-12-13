@@ -64,7 +64,7 @@ class RetrievalRewardManager:
         self.num_examine = num_examine
         self.compute_score = compute_score
         self.reward_fn_key = reward_fn_key
-        self.quality_method = quality_method
+        self.quality_method = tuple(quality_method.split("+"))
 
         self.reranker_url = kwargs.get("reranker_url", "http://localhost:8000/v1/score")
 
@@ -208,7 +208,7 @@ class RetrievalRewardManager:
                     f"\nGround Truth Relevant Docs: {relevant_docs[:10]}" + ("..." if len(relevant_docs) > 10 else "")
                 )
                 print(f"Num Relevant Docs: {len(relevant_docs)}")
-                print(f"\n{self.quality_method.upper()}@{self.k} Reward: {reward:.4f}")
+                print(f"\n{self.quality_method}@{self.k} Reward: {reward:.4f}")
 
             print("\n" + "=" * 100)
             print(f"Batch Summary: {len(data)} samples, Mean Reward: {sum(rewards) / len(rewards):.4f}")

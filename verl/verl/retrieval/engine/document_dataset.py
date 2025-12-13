@@ -106,62 +106,70 @@ class UnifiedDataset:
         k: int = 10,
         reranker_url: str = "http://localhost:8000/v1/score",
     ) -> List[float]:
-        # Flatten pairs for batch inference
-        all_pairs = []
+        # Pre-allocate lists
+        queries_txt = []
+        docs_txt = []
         doc_counts = []
 
+        # 1. Single Pass Construction
         for query_id, docs in zip(query_uids, retrieved_doc_ids_batch):
             docs_k = docs[:k]
-            query_text = self.queries[query_id]
-            pairs = [[query_text, self.corpus[doc]] for doc in docs_k]
-            all_pairs.extend(pairs)
-            doc_counts.append(len(pairs))
 
-        if not all_pairs:
+            if not docs_k:
+                doc_counts.append(0)
+                continue
+
+            # Extract valid documents first (lookup + filter)
+            valid_docs_text = [self.corpus[doc] for doc in docs_k if doc in self.corpus]
+
+            count = len(valid_docs_text)
+
+            # If all docs were missing from corpus, skip
+            if count == 0:
+                doc_counts.append(0)
+                continue
+
+            # Extend the query list by the exact count of valid docs
+            current_query_text = self.queries[query_id]
+            queries_txt.extend([current_query_text] * count)
+
+            docs_txt.extend(valid_docs_text)
+            doc_counts.append(count)
+
+        if not queries_txt:
             return [0.0] * len(query_uids)
 
-        # Prepare payload for FastAPI (split into parallel lists)
-        text_1 = [p[0] for p in all_pairs]
-        text_2 = [p[1] for p in all_pairs]
+        # 2. Payload Construction
+        # Important: Ensure the server logic (or client post-processing) normalizes
+        # these scores to 0-1 if you want bounded rewards.
+        payload = {"text_1": queries_txt, "text_2": docs_txt, "normalize": True}
 
-        payload = {"text_1": text_1, "text_2": text_2}
+        # 3. Request
+        response = requests.post(reranker_url, json=payload)
+        response.raise_for_status()
 
-        # Single batch call to the remote reranker backend
-        try:
-            response = requests.post(reranker_url, json=payload)
-            response.raise_for_status()
+        # 4. Score Processing
+        data = response.json().get("data", [])
+        all_scores = np.array([item["score"] for item in data], dtype=np.float32)
 
-            # Parse response: {"data": [{"score": 0.1, "index": 0}, ...]}
-            data = response.json().get("data", [])
-            all_scores = [item["score"] for item in data]
-
-            # Safety check: ensure we got back the same number of scores
-            if len(all_scores) != len(all_pairs):
-                print(f"Warning: Reranker returned {len(all_scores)} scores for {len(all_pairs)} pairs.")
-                # Pad with zeros if necessary to prevent crash
-                all_scores.extend([0.0] * (len(all_pairs) - len(all_scores)))
-
-        except Exception as e:
-            print(f"Error calling reranker API: {e}")
-            all_scores = [0.0] * len(all_pairs)
-
-        # Split scores back to per-query structure and compute discounted sum
         rewards = []
         start_idx = 0
-        discounts_cache = 1.0 / np.log2(np.arange(k) + 2)
+
+        # No discount cache needed for Max Strategy
 
         for count in doc_counts:
             if count == 0:
                 rewards.append(0.0)
                 continue
 
-            # Convert to numpy array for vector operations
-            scores = np.array(all_scores[start_idx : start_idx + count])
-            current_discounts = discounts_cache[:count]
+            # Slice the scores belonging to this query
+            scores = all_scores[start_idx : start_idx + count]
 
-            # Apply discounts: score / log2(rank + 2)
-            discounted_scores = scores * current_discounts
-            rewards.append(float(np.sum(discounted_scores)))
+            # STRATEGY: MAX SCORE
+            # Reward the model based on the single best document found.
+            # This ignores the noise in lower ranks.
+            best_score = float(np.max(scores))
+            rewards.append(best_score)
 
             start_idx += count
 
@@ -171,28 +179,33 @@ class UnifiedDataset:
         self,
         query_uids: List[str],
         retrieved_doc_ids_batch: List[List[str]],
-        method: str = "ndcg",
+        method: tuple = ("ndcg"),
         k: int = 10,
         reranker_url: str = "http://localhost:8000/v1/score",
     ) -> List[float]:
         """
         Compute rewards for a batch of queries using batched operations.
         """
-        print("RETRIEVED DOCS SHAPE:", np.array(retrieved_doc_ids_batch).shape)
-        if method == "ndcg":
-            return self.compute_ndcg_batch(query_uids, retrieved_doc_ids_batch, k=k)
-        elif method == "recall":
-            return self.compute_recall_batch(query_uids, retrieved_doc_ids_batch, k=k)
-        elif method == "precision":
-            return self.compute_precision_batch(query_uids, retrieved_doc_ids_batch, k=k)
-        elif method == "hit":
-            return self.compute_hit_batch(query_uids, retrieved_doc_ids_batch, k=k)
-        elif method == "reranker":
-            return self.compute_reranker_score_batch(
-                query_uids, retrieved_doc_ids_batch, k=k, reranker_url=reranker_url
-            )
-        else:
-            raise ValueError(f"Unknown method: {method}")
+        result = []
+        for fn in method:
+            if fn == "ndcg":
+                result.append(self.compute_ndcg_batch(query_uids, retrieved_doc_ids_batch, k=k))
+            elif fn == "recall":
+                result.append(self.compute_recall_batch(query_uids, retrieved_doc_ids_batch, k=k))
+            elif fn == "precision":
+                result.append(self.compute_precision_batch(query_uids, retrieved_doc_ids_batch, k=k))
+            elif fn == "hit":
+                result.append(self.compute_hit_batch(query_uids, retrieved_doc_ids_batch, k=k))
+            elif fn == "reranker":
+                result.append(
+                    self.compute_reranker_score_batch(
+                        query_uids, retrieved_doc_ids_batch, k=k, reranker_url=reranker_url
+                    )
+                )
+            else:
+                raise ValueError(f"Unknown method: {method}")
+        result = np.array(result)
+        return np.mean(result, axis=0)
 
 
 class BaseDatasetAdapter(ABC):

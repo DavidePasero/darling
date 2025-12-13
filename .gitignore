@@ -7,3 +7,5 @@ WORKFLOW.md
 *datasets/
 evals/*
 .vscode/*
+*.whl
+outputs/*

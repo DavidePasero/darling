@@ -65,7 +65,7 @@ async def score(request: ScoreRequest):
 
     try:
         # FlagReranker.compute_score returns a list of floats (logits or scores)
-        scores = reranker_model.compute_score(pairs)
+        scores = reranker_model.compute_score(pairs, normalize=True)
 
         # If single pair, it returns a float, ensure it's a list
         if isinstance(scores, float):
