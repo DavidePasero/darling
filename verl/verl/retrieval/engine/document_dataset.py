@@ -140,8 +140,6 @@ class UnifiedDataset:
             return [0.0] * len(query_uids)
 
         # 2. Payload Construction
-        # Important: Ensure the server logic (or client post-processing) normalizes
-        # these scores to 0-1 if you want bounded rewards.
         payload = {"text_1": queries_txt, "text_2": docs_txt, "normalize": True}
 
         # 3. Request
@@ -154,8 +152,6 @@ class UnifiedDataset:
 
         rewards = []
         start_idx = 0
-
-        # No discount cache needed for Max Strategy
 
         for count in doc_counts:
             if count == 0:
