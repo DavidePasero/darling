@@ -1,10 +1,14 @@
 from typing import List, Literal, Optional, Tuple
 import numpy as np
+
 import torch
 from sentence_transformers import SentenceTransformer
 import faiss
 import asyncio
-import aiohttp
+import pickle
+import os
+import time
+from openai import AsyncOpenAI
 
 from .base_retriever import BaseRetriever
 
@@ -14,25 +18,27 @@ class FaissRetriever(BaseRetriever):
     def __init__(
         self,
         faiss_index_path: str,
-        embedding_model: str = "Qwen/Qwen3-Embedding-0.6B",
+        embedding_model: str,
         id_mapping_path: Optional[str] = None,
-        index_device: str = "cpu",
+        index_device: str = "cuda",
         device: str = "cuda",
         embedding_mode: str = "local",
         vllm_server_url: Optional[str] = None,
+        max_seq_len: int = 512,
         verbose: bool = True
     ):
         """
         Initialize retriever with FAISS index and embedding model.
 
         Args:
-            faiss_index_path: Path to FAISS index file (.faiss)
+            faiss_index_path: Path to FAISS index file (.faiss) or embeddings (.npy)
             embedding_model: HuggingFace model name for embeddings
-            id_mapping_path: Path to pickle file with document ID mapping
+            id_mapping_path: Path to pickle or text file with document ID mapping
             index_device: Device for FAISS index ('cuda' or 'cpu')
             device: Device for embedding model ('cuda' or 'cpu')
             embedding_mode: 'local' or 'vllm'
             vllm_server_url: URL for vLLM server (required if embedding_mode='vllm')
+            max_seq_len: Maximum sequence length for embeddings (default 512)
             verbose: Print initialization messages
         """
         super().__init__(id_mapping_path=id_mapping_path, verbose=verbose)
@@ -41,18 +47,45 @@ class FaissRetriever(BaseRetriever):
         self.embedding_model_name = embedding_model
         self.embedding_mode = embedding_mode
         self.vllm_server_url = vllm_server_url
+        self.id_mapping_path = id_mapping_path
+        self.max_seq_len = max_seq_len
+
+        # Load ID mapping if provided
+        self.id_mapping = None
+        if self.id_mapping_path and os.path.exists(self.id_mapping_path):
+            if verbose:
+                print(f"Loading ID mapping: {self.id_mapping_path}")
+            
+            try:
+                # Try pickle first
+                with open(self.id_mapping_path, 'rb') as f:
+                    self.id_mapping = pickle.load(f)
+            except Exception:
+                # Fallbck to text file (line-separated IDs)
+                if verbose:
+                    print(f"Pickle load failed, trying text mode for: {self.id_mapping_path}")
+                with open(self.id_mapping_path, 'r') as f:
+                    self.id_mapping = [line.strip() for line in f]
+            
+            if verbose:
+                print(f"Loaded {len(self.id_mapping)} document IDs")
 
         if embedding_mode == "vllm":
             if vllm_server_url is None:
                 raise ValueError("vllm_server_url required for embedding_mode='vllm'")
-            
+
             if verbose:
                 print(f"Using vLLM server: {vllm_server_url}")
                 print(f"Embedding model: {embedding_model}")
-            
+
+            # Initialize AsyncOpenAI client pointing to vLLM server
+            self.openai_client = AsyncOpenAI(
+                base_url=f"{vllm_server_url}/v1",
+                api_key="EMPTY"  # vLLM doesn't need a real API key
+            )
             self.embedding_model = None
             self.dimension = 1536
-            
+
         else:
             if verbose:
                 print(f"Loading embedding model locally: {embedding_model}")
@@ -71,41 +104,69 @@ class FaissRetriever(BaseRetriever):
         if verbose:
             print(f"Loading FAISS index: {faiss_index_path}")
 
-        cpu_index = faiss.read_index(faiss_index_path)
+        if faiss_index_path.endswith('.npy'):
+            if verbose:
+                print("Detected .npy file, building Flat index from embeddings...")
+            embeddings = np.load(faiss_index_path)
+            dimension = embeddings.shape[1]
+            cpu_index = faiss.IndexFlatIP(dimension)
+            cpu_index.add(embeddings)
+        else:
+            cpu_index = faiss.read_index(faiss_index_path)
 
-        if index_device == "cuda" and torch.cuda.is_available():
+        # Move index to GPU if requested
+        if index_device == "cuda":
+            if not torch.cuda.is_available():
+                raise RuntimeError("CUDA requested but torch.cuda.is_available() returned False")
+
+            if verbose:
+                print(f"Transferring index to GPU (this may take a minute for large indices)...")
+
+            transfer_start = time.time()
             res = faiss.StandardGpuResources()
             co = faiss.GpuClonerOptions()
             co.useFloat16 = True
             co.useFloat16LookupTables = True
             self.index = faiss.index_cpu_to_gpu(res, 0, cpu_index, co)
+
             if verbose:
-                print(f"Index on GPU: {self.index.ntotal} vectors")
+                transfer_time = time.time() - transfer_start
+                print(f"Index on GPU: {self.index.ntotal} vectors (transfer took {transfer_time:.2f}s)")
+        
         else:
             self.index = cpu_index
             if verbose:
                 print(f"Index on CPU: {self.index.ntotal} vectors")
 
-        if self.verbose:
+        # Detect index type and whether it supports nprobe
+        index_class = self.index.__class__.__name__
+        self.supports_nprobe = 'IVF' in index_class or hasattr(self.index, 'nprobe')
+
+        if verbose:
+            print(f"Index type: {index_class}")
+            print(f"Supports nprobe: {self.supports_nprobe}")
             print(f"FAISS Retriever ready!\n")
 
     async def _encode_vllm_async(self, texts: List[str], batch_size: int = 64) -> np.ndarray:
-        async def fetch_batch(session, batch_texts):
-            async with session.post(
-                f"{self.vllm_server_url}/v1/embed",
-                json={"model": self.embedding_model_name, "input": batch_texts},
-                timeout=aiohttp.ClientTimeout(total=60)
-            ) as response:
-                response.raise_for_status()
-                data = await response.json()
-                return [item["embedding"] for item in data["data"]]
+        """Encode texts using vLLM server via AsyncOpenAI client."""
+        # Use max_seq_len directly (vLLM will handle it)
+        # Note: truncate_prompt_tokens must be <= max_model_len of the server
+        max_tokens = self.max_seq_len
+
+        async def fetch_batch(batch_texts):
+            # Use truncate_prompt_tokens for automatic left truncation
+            response = await self.openai_client.embeddings.create(
+                model=self.embedding_model_name,
+                input=batch_texts,
+                extra_body={"truncate_prompt_tokens": max_tokens}
+            )
+            return [item.embedding for item in response.data]
 
         batches = [texts[i:i + batch_size] for i in range(0, len(texts), batch_size)]
-        
-        async with aiohttp.ClientSession() as session:
-            tasks = [fetch_batch(session, batch) for batch in batches]
-            results = await asyncio.gather(*tasks)
-        
+
+        tasks = [fetch_batch(batch) for batch in batches]
+        results = await asyncio.gather(*tasks)
+
         embeddings = np.array([emb for batch_result in results for emb in batch_result], dtype="float32")
         norms = np.linalg.norm(embeddings, axis=1, keepdims=True)
         return embeddings / norms
@@ -129,9 +190,15 @@ class FaissRetriever(BaseRetriever):
         Returns:
             np.ndarray of shape (len(texts), dimension)
         """
+        debug_log = os.environ.get("DEBUG_LOG", "0") == "1"
+
+        if debug_log:
+            start_time = time.time()
+            print(f"[RETRIEVAL DEBUG] Starting embedding encoding for {len(texts)} texts (batch_size={batch_size}, mode={self.embedding_mode})")
+
         if self.embedding_mode == "vllm":
-            return asyncio.run(self._encode_vllm_async(texts, batch_size))
-            
+            result = asyncio.run(self._encode_vllm_async(texts, batch_size))
+
         else:
             encode_kwargs = {
                 "batch_size": batch_size,
@@ -147,7 +214,13 @@ class FaissRetriever(BaseRetriever):
                 texts = [f"Represent this sentence for searching relevant passages: {t}" for t in texts]
 
             embeddings = self.embedding_model.encode(texts, **encode_kwargs)
-            return embeddings.astype("float32")
+            result = embeddings.astype("float32")
+
+        if debug_log:
+            elapsed = time.time() - start_time
+            print(f"[RETRIEVAL DEBUG] Embedding encoding completed in {elapsed:.2f}s ({len(texts)/elapsed:.2f} texts/sec)")
+
+        return result
 
     def search(
         self,
@@ -172,22 +245,49 @@ class FaissRetriever(BaseRetriever):
             - scores: shape (len(queries), k)
             - indices: shape (len(queries), k)
         """
-        # Set nprobe parameter
-        if hasattr(self.index, 'nprobe'):
+        debug_log = os.environ.get("DEBUG_LOG", "0") == "1"
+
+        if debug_log:
+            search_start = time.time()
+            print(f"[RETRIEVAL DEBUG] Starting FAISS search for {len(queries)} queries (k={k}, nprobe={nprobe})")
+
+        if nprobe is not None and self.supports_nprobe:
             self.index.nprobe = nprobe
-        else:
-            # For GPU index
-            faiss.GpuParameterSpace().set_index_parameter(self.index, "nprobe", nprobe)
+            if debug_log:
+                print(f"[RETRIEVAL DEBUG] Set nprobe={nprobe}")
 
         # Encode queries
+        if debug_log:
+            encode_start = time.time()
+
         query_embeddings = self.encode(
             queries,
             batch_size=batch_size,
             is_query=True
         )
 
-        # Search
+        if debug_log:
+            encode_time = time.time() - encode_start
+            print(f"[RETRIEVAL DEBUG] Query encoding completed in {encode_time:.2f}s")
+            print(f"[RETRIEVAL DEBUG] Query embedding shape: {query_embeddings.shape}")
+
+        if query_embeddings.shape[1] != self.index.d:
+            raise ValueError(
+                f"Query embedding dimension ({query_embeddings.shape[1]}) "
+                f"does not match index dimension ({self.index.d}). "
+                f"Embedding model: {self.embedding_model_name}"
+            )
+
+        if debug_log:
+            index_search_start = time.time()
+
         scores, indices = self.index.search(query_embeddings, k)
+
+        if debug_log:
+            index_search_time = time.time() - index_search_start
+            total_time = time.time() - search_start
+            print(f"[RETRIEVAL DEBUG] FAISS index.search() completed in {index_search_time:.2f}s")
+            print(f"[RETRIEVAL DEBUG] Total search time: {total_time:.2f}s (encode: {encode_time:.2f}s, index: {index_search_time:.2f}s)")
 
         return (scores, indices) if return_scores else indices
 
@@ -224,6 +324,13 @@ class FaissRetriever(BaseRetriever):
             nprobe: int = 64,
             batch_size: int = 128
     ):
+        debug_log = os.environ.get("DEBUG_LOG", "0") == "1"
+
+        if debug_log:
+            batch_start = time.time()
+            total_rewrites = sum(len(rw) for rw in query_rewrites)
+            print(f"[RETRIEVAL DEBUG] retrieve_batch called: {len(query_rewrites)} queries, {total_rewrites} total rewrites, mode={mode}")
+
         flat_rewrites = []
         mapping = []
 
@@ -235,6 +342,9 @@ class FaissRetriever(BaseRetriever):
         if len(flat_rewrites) == 0:
             return []
 
+        if debug_log:
+            print(f"[RETRIEVAL DEBUG] Flattened to {len(flat_rewrites)} queries for batch search")
+
         scores_flat, index_flat = self.search(
             flat_rewrites,
             k=k,
@@ -242,7 +352,15 @@ class FaissRetriever(BaseRetriever):
             batch_size=batch_size
         )
 
+        if debug_log:
+            mapping_start = time.time()
+            print(f"[RETRIEVAL DEBUG] Starting index->ID mapping")
+
         doc_ids_flat = self.map_indices_to_ids(index_flat)
+
+        if debug_log:
+            mapping_time = time.time() - mapping_start
+            print(f"[RETRIEVAL DEBUG] Index->ID mapping completed in {mapping_time:.2f}s")
 
         Q = len(query_rewrites)
         rewrite_results = [[] for _ in range(Q)]
@@ -307,6 +425,10 @@ class FaissRetriever(BaseRetriever):
                 "rewrite_results": per_rw
             })
 
+        if debug_log:
+            total_time = time.time() - batch_start
+            print(f"[RETRIEVAL DEBUG] retrieve_batch completed in {total_time:.2f}s")
+
         return results
 
     def get_index_size(self) -> int:
@@ -314,47 +436,4 @@ class FaissRetriever(BaseRetriever):
         return self.index.ntotal
 
 
-# Backward compatibility: allow importing as "Retriever"
 Retriever = FaissRetriever
-
-
-if __name__ == "__main__":
-    # Example usage
-    print("=" * 80)
-    print("Testing Retriever Class")
-    print("=" * 80)
-
-    # This assumes you have a FAISS index and ID mapping
-    # Update these paths to your actual files
-    retriever = Retriever(
-        faiss_index_path="path/to/msmarco.faiss",
-        embedding_model="Qwen/Qwen3-Embedding-0.6B",
-        id_mapping_path="path/to/id_mapping.pkl"
-    )
-
-    # Test with multiple rewrites per query
-    query_rewrites = [
-        ["capital of france", "france capital city", "paris location"],
-        ["deep learning", "neural networks", "machine learning"]
-    ]
-
-    print("\n" + "=" * 80)
-    print("Testing UNION mode (default)")
-    print("=" * 80)
-    results = retriever.retrieve_batch(query_rewrites, k=5, mode="union")
-
-    for i, result in enumerate(results):
-        print(f"\nQuery {i+1}: {query_rewrites[i]}")
-        print(f"  Merged Top-5 Doc IDs: {result['doc_ids'][:5]}")
-        print(f"  Merged Scores: {result['scores'][:5]}")
-        print(f"  Number of rewrites: {len(result['rewrite_results'])}")
-
-    print("\n" + "=" * 80)
-    print("Testing INTERSECTION mode")
-    print("=" * 80)
-    results = retriever.retrieve_batch(query_rewrites, k=5, mode="intersection")
-
-    for i, result in enumerate(results):
-        print(f"\nQuery {i+1}: {query_rewrites[i]}")
-        print(f"  Common Doc IDs: {result['doc_ids'][:5]}")
-        print(f"  Scores: {result['scores'][:5]}")

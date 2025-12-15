@@ -1,3 +1,9 @@
+# local logs
+logs/*
+log
+outputs
+.history
+
 change_header.py
 dpo/
 TODO.md
@@ -5,3 +11,8 @@ WORKFLOW.md
 *.index
 
 *datasets/
+evals/*
+.vscode/*
+*.whl
+outputs/*
+wandb/*

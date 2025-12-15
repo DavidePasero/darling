@@ -12,12 +12,12 @@ def main():
     parser = argparse.ArgumentParser(description="Build BM25 Index from BEIR Dataset using Pyserini")
     parser.add_argument(
         "--beir-dataset",
-        default="datasets/msmarco",
+        default="datasets/fiqa",
         help="Path to BEIR dataset directory"
     )
     parser.add_argument(
         "--output-dir",
-        default = '../../../scratch_shared/msmarco_bm25_index',
+        default = '../scratch_shared/beir_bm25_index',
         help="Output directory for index"
     )
     parser.add_argument(

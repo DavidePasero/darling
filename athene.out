@@ -1,0 +1,50 @@
+Loading input from athene_test.json
+Loaded 3 prompt-response pairs
+Loading Athene reward model from Nexusflow/Athene-RM-8B
+Model loaded successfully
+Computing rewards...
+Saving results to athene_out.json
+
+=== Reward Statistics ===
+Number of samples: 3
+Mean reward: -0.9010
+Min reward: -2.6250
+Max reward: 0.7930
+Median reward: -0.8711
+Done! Results saved to athene_out.json
+Loading input from athene_test.json
+Loaded 3 prompt-response pairs
+Loading Athene reward model from Nexusflow/Athene-RM-8B
+CLS token: <|reserved_special_token_1|>, ID: 128003
+Model loaded successfully
+Computing rewards...
+CLS token (ID=128003) not found in input 0. Using last token at position 4095
+CLS token (ID=128003) not found in input 1. Using last token at position 4095
+CLS token (ID=128003) not found in input 2. Using last token at position 4095
+Saving results to athene_out.json
+
+=== Reward Statistics ===
+Number of samples: 3
+Mean reward: -0.8685
+Min reward: -0.9961
+Max reward: -0.8047
+Median reward: -0.8047
+Done! Results saved to athene_out.json
+Loading input from athene_test.json
+Loaded 6 prompt-response pairs
+Loading Athene reward model from Nexusflow/Athene-RM-8B
+CLS token: <|reserved_special_token_1|>, ID: 128003
+Model loaded successfully
+Computing rewards...
+CLS token (ID=128003) not found in input 0. Using last token at position 4095
+CLS token (ID=128003) not found in input 1. Using last token at position 4095
+CLS token (ID=128003) not found in input 2. Using last token at position 4095
+Saving results to athene_out.json
+
+=== Reward Statistics ===
+Number of samples: 6
+Mean reward: -0.8854
+Min reward: -2.6406
+Max reward: 0.7930
+Median reward: -0.8008
+Done! Results saved to athene_out.json

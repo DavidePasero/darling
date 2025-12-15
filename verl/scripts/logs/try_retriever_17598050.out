@@ -1,0 +1,79 @@
+There are no unused tarball(s) to remove.
+There are no index cache(s) to remove.
+There are no unused package(s) to remove.
+There are no tempfile(s) to remove.
+There are no logfile(s) to remove.
+=========================================
+Checking NumPy and FAISS installation
+=========================================
+Current NumPy version: 1.26.4
+NumPy version is compatible with FAISS
+Removing any existing FAISS installations...
+Found existing installation: faiss-gpu 1.7.2
+Uninstalling faiss-gpu-1.7.2:
+  Successfully uninstalled faiss-gpu-1.7.2
+Installing faiss-gpu (force reinstall)...
+Collecting faiss-gpu
+  Downloading faiss_gpu-1.7.2-cp310-cp310-manylinux_2_17_x86_64.manylinux2014_x86_64.whl.metadata (1.4 kB)
+Downloading faiss_gpu-1.7.2-cp310-cp310-manylinux_2_17_x86_64.manylinux2014_x86_64.whl (85.5 MB)
+   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 85.5/85.5 MB 95.1 MB/s  0:00:00
+Installing collected packages: faiss-gpu
+Successfully installed faiss-gpu-1.7.2
+faiss-gpu installed successfully
+Name: faiss-gpu
+Version: 1.7.2
+Summary: A library for efficient similarity search and clustering of dense vectors.
+Home-page: https://github.com/kyamagu/faiss-wheels
+Author: Kota Yamaguchi
+Author-email: KotaYamaguchi1984@gmail.com
+License: MIT
+Location: /gpfs/home4/scur1900/.conda/envs/verlenv/lib/python3.10/site-packages
+Requires: 
+Required-by: 
+=========================================
+Verifying FAISS installation
+=========================================
+FAISS module location: /home/scur1900/.conda/envs/verlenv/lib/python3.10/site-packages/faiss/__init__.py
+FAISS version: 1.7.2
+Has read_index: True
+Has StandardGpuResources: True
+Available FAISS attributes: ['AdditiveCoarseQuantizer', 'AdditiveQuantizer', 'AlignedTableFloat32', 'AlignedTableFloat32_round_capacity', 'AlignedTableUint16', 'AlignedTableUint16_round_capacity', 'AlignedTableUint8', 'AlignedTableUint8_round_capacity', 'AlignedTable_to_array', 'AllocInfo', 'AllocRequest', 'ArrayInvertedLists', 'AutoTuneCriterion', 'BitstringReader', 'BitstringWriter', 'BlockInvertedLists', 'BufferList', 'BufferedIOReader', 'BufferedIOWriter', 'ByteVector']
+=========================================
+FAISS installation complete
+=========================================
+Testing BM25 retrieval system
+Dataset: /home/scur1900/scratch_shared/msmarco
+K: 10
+================================================================================
+Loaded 43 queries
+Loaded 8841823 documents
+Loaded 43 qrels
+BM25 index: /home/scur1900/scratch_shared/msmarco/bm25_index/index
+ID mapping: /home/scur1900/scratch_shared/msmarco/bm25_index/id_mapping.pkl
+Loading ID mapping: /home/scur1900/scratch_shared/msmarco/bm25_index/id_mapping.pkl
+Loaded 8841823 document IDs
+Loading BM25 index: /home/scur1900/scratch_shared/msmarco/bm25_index/index
+BM25 parameters: k1=0.9, b=0.4
+Index size: 8841823 documents
+Number of search threads: 32
+BM25 Retriever ready!
+
+
+================================================================================
+Testing retrieval and reward computation
+================================================================================
+Testing on 43 queries
+Searched 43/43 queries
+Search took 7.7500 seconds
+
+Results for 43 queries:
+--------------------------------------------------------------------------------
+
+================================================================================
+Summary Statistics
+================================================================================
+Mean NDCG@10:      0.6583
+Mean Recall@10:    0.1285
+Mean Precision@10: 0.6186
+Mean Hit@10:       0.9767
+================================================================================

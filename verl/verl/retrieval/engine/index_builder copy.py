@@ -5,7 +5,10 @@ import subprocess
 from pathlib import Path
 from typing import List, Literal, Optional
 import numpy as np
+import torch
+import faiss
 from tqdm import tqdm
+from sentence_transformers import SentenceTransformer
 from verl.retrieval.engine.document_dataset import BeirAdapter
 
 
@@ -99,9 +102,6 @@ class IndexBuilder:
             if self.verbose:
                 print(f"\nLoading embedding model: {embedding_model}")
 
-            from sentence_transformers import SentenceTransformer
-            import torch
-
             model = SentenceTransformer(
                 embedding_model,
                 device=device,
@@ -141,8 +141,6 @@ class IndexBuilder:
             print(f"  IVF nlist: {nlist}")
             print(f"  PQ m: {m}")
 
-        import faiss
-        import torch
         dimension = embeddings.shape[1]
         quantizer = faiss.IndexFlatIP(dimension)
         index = faiss.IndexIVFPQ(quantizer, dimension, nlist, m, 8)
@@ -185,11 +183,7 @@ class IndexBuilder:
         corpus_ids: list,
         threads: int
     ):
-        # Create a dedicated directory for the JSONL file to avoid indexing other files in output_dir
-        jsonl_dir = self.output_dir / "corpus_jsonl"
-        jsonl_dir.mkdir(parents=True, exist_ok=True)
-        jsonl_file = jsonl_dir / "corpus.jsonl"
-        
+        jsonl_file = self.output_dir / "corpus.jsonl"
         index_path = self.output_dir / "index"
         id_mapping_path = self.output_dir / "id_mapping.pkl"
 
@@ -218,7 +212,7 @@ class IndexBuilder:
         cmd = [
             "python", "-m", "pyserini.index.lucene",
             "--collection", "JsonCollection",
-            "--input", str(jsonl_dir),
+            "--input", str(jsonl_file.parent),
             "--index", str(index_path),
             "--generator", "DefaultLuceneDocumentGenerator",
             "--threads", str(threads),
@@ -244,9 +238,6 @@ class IndexBuilder:
         with open(id_mapping_path, 'wb') as f:
             pickle.dump(corpus_ids, f)
 
-        # jsonl_file.unlink()
-        import shutil
-        shutil.rmtree(jsonl_dir)
-
+        jsonl_file.unlink()
         if self.verbose:
             print(f"Removed intermediate JSONL file: {jsonl_file}")

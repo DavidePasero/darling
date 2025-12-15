@@ -2,7 +2,7 @@
 from beir import util
 import os
 
-dataset = "fiqa"
+dataset = "msmarco"
 url = f"https://public.ukp.informatik.tu-darmstadt.de/thakur/BEIR/datasets/{dataset}.zip"
 
 out_dir = "datasets"

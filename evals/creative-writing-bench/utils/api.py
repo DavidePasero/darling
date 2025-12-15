@@ -1,12 +1,11 @@
 import os
 import time
 import logging
-import json
-import requests
 import random
 import string
 from typing import Optional, Dict, Any
 from dotenv import load_dotenv
+from openai import OpenAI, APIError, APITimeoutError, RateLimitError
 
 load_dotenv()
 
@@ -19,26 +18,23 @@ class APIClient:
     def __init__(self, model_type=None, request_timeout=240, max_retries=3, retry_delay=5):
         self.model_type = model_type or "default"
 
-        if model_type == "test":
-            self.api_key = os.getenv("TEST_API_KEY", os.getenv("OPENAI_API_KEY"))
-            self.base_url = os.getenv("TEST_API_URL", os.getenv("OPENAI_API_URL", "https://api.openai.com/v1/chat/completions"))
-        elif model_type == "judge":
-            self.api_key = os.getenv("JUDGE_API_KEY", os.getenv("OPENAI_API_KEY"))
-            self.base_url = os.getenv("JUDGE_API_URL", os.getenv("OPENAI_API_URL", "https://api.openai.com/v1/chat/completions"))
-        else:
-            self.api_key = os.getenv("OPENAI_API_KEY")
-            self.base_url = os.getenv("OPENAI_API_URL", "https://api.openai.com/v1/chat/completions")
+        # Override with hardcoded values
+        base_url = "https://api.openai.com/v1"
+        api_key = os.getenv('JUDGE_API_KEY', None)
 
         self.request_timeout = int(os.getenv("REQUEST_TIMEOUT", request_timeout))
         self.max_retries = int(os.getenv("MAX_RETRIES", max_retries))
         self.retry_delay = int(os.getenv("RETRY_DELAY", retry_delay))
 
-        self.headers = {
-            "Content-Type": "application/json",
-            "Authorization": f"Bearer {self.api_key}"
-        }
+        # Initialize OpenAI client
+        self.client = OpenAI(
+            api_key=api_key,
+            base_url=base_url,
+            timeout=self.request_timeout,
+            max_retries=0  # We'll handle retries manually
+        )
 
-        logging.debug(f"Initialized {self.model_type} API client with URL: {self.base_url}")
+        logging.debug(f"Initialized {self.model_type} API client with URL: {base_url}")
 
     def generate(self, model: str, prompt: str, temperature: float = 0.0, max_tokens: int = 8096, include_seed=True, min_p = 0.1) -> str:
         """
@@ -63,55 +59,54 @@ class APIClient:
                 messages = [{"role": "system", "content": random_seed_block}] + messages
 
         for attempt in range(self.max_retries):
-            response = {}
             try:
-                payload = {
+                # Build kwargs for the API call
+                kwargs = {
                     "model": model,
                     "messages": messages,
                     "temperature": temperature,
-                    "max_tokens": max_tokens                    
                 }
-                if min_p != None and model != 'o3':
-                    # Only use min_p for the test model (not judge).
-                    # If your test model doesn't support min_p, you may need to
-                    # disable this here. Alternatively you could use openrouter
-                    # which will automatically omit unsupported params.
-                    payload['min_p'] = min_p
+
+                # Handle model-specific parameters
                 if model == 'o3':
-                    # o3 has special reqs via the openai api
-                    del payload['max_tokens']
-                    payload['max_completion_tokens'] = max_tokens
-                    payload['temperature'] = 1
-                response = requests.post(
-                    self.base_url,
-                    headers=self.headers,
-                    json=payload,
-                    timeout=self.request_timeout
-                )
-                response.raise_for_status()
-                data = response.json()
-                content = data["choices"][0]["message"]["content"]
-                # strip out any <think> blocks if the model yields that
+                    # o3 has special requirements via the openai api
+                    kwargs['max_completion_tokens'] = max_tokens
+                    kwargs['temperature'] = 1
+                else:
+                    kwargs['max_tokens'] = max_tokens
+
+                    # Only use min_p for non-o3 models if specified
+                    if min_p is not None:
+                        # Note: min_p may not be supported by all models
+                        # If your test model doesn't support min_p, you may need to
+                        # disable this or use a provider like openrouter
+                        kwargs['min_p'] = min_p
+
+                # Make the API call using OpenAI client
+                response = self.client.chat.completions.create(**kwargs)
+                content = response.choices[0].message.content
+
+                # Strip out any <think> blocks if the model yields that
                 if '<think>' in content and "</think>" in content:
                     post_think = content.find('</think>') + len("</think>")
                     content = content[post_think:]
                 if '<reasoning>' in content and "</reasoning>" in content:
                     post_think = content.find('</reasoning>') + len("</reasoning>")
                     content = content[post_think:]
+
                 return content
-            except requests.exceptions.Timeout:
+
+            except APITimeoutError:
                 logging.warning(f"Request timed out on attempt {attempt+1}/{self.max_retries}")
-            except requests.exceptions.HTTPError as e:
+            except RateLimitError as e:
+                logging.warning(f"Rate limit hit on attempt {attempt+1}/{self.max_retries}. Backing off.")
                 logging.error(e)
-                if response:
-                    print(response)
-                if e.response.status_code == 429:
-                    logging.warning("Rate limit. Backing off.")
-                    time.sleep(self.retry_delay * (attempt + 1))
-                    continue
+                time.sleep(self.retry_delay * (attempt + 1))
+                continue
+            except APIError as e:
+                logging.error(f"API error on attempt {attempt+1}/{self.max_retries}: {str(e)}")
             except Exception as e:
-                logging.error(e)
-                logging.warning(f"Error on attempt {attempt+1}/{self.max_retries}: {str(e)}")
+                logging.error(f"Unexpected error on attempt {attempt+1}/{self.max_retries}: {str(e)}")
 
             time.sleep(self.retry_delay)
 

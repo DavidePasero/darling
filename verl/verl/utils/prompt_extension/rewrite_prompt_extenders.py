@@ -77,10 +77,9 @@ class ContextAwareRewritePromptExtender(BasePromptExtender):
 
 class BM25RewritePromptExtender(BasePromptExtender):
     _REWRITE_SYSTEM_PROMPT = (
-        "Rewrite the query optimized for BM25 retrieval. Produce a keyword-rich version "
-        "with relevant synonyms. You may internally generate several alternatives if the "
-        "query is long. Only return the rewritten queries with "
-        "no explanations, no lists, and no additional text. Be creative and add menaingful extensions."
+        "Do one rewrite of the query optimized for BM25 retrieval. Produce a keyword-rich version "
+        "with relevant synonyms. Only return the rewritten queries with  no explanations, no lists, and no additional text."
+        "Be creative and add menaingful extensions. "
     )
     _REWRITE_USER_PROMPT = (
         "Rewrite the following query as BM25-optimized keywords:"

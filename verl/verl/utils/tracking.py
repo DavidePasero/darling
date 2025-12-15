@@ -233,6 +233,64 @@ def _flatten_dict(raw: Dict[str, Any], *, sep: str) -> Dict[str, Any]:
 
 
 @dataclasses.dataclass
+class RewriteLogger:
+    """Logger for query rewrites in retrieval training"""
+
+    def log(self, loggers, queries, rewrites, step):
+        """
+        Log query rewrites to configured loggers.
+
+        Args:
+            loggers: List of logger names (e.g., ['wandb', 'console'])
+            queries: List of original queries (strings)
+            rewrites: List of lists of rewrites, where rewrites[i] contains multiple rewrites for queries[i]
+            step: Current training step
+        """
+        if "wandb" in loggers:
+            self.log_rewrites_to_wandb(queries, rewrites, step)
+        if "console" in loggers:
+            self.log_rewrites_to_console(queries, rewrites, step)
+
+    def log_rewrites_to_wandb(self, queries, rewrites, step):
+        """Log rewrites to wandb as a table"""
+        import wandb
+
+        # Create column names: query + rewrite_1, rewrite_2, ..., rewrite_n
+        max_rewrites = max(len(r) for r in rewrites) if rewrites else 0
+        columns = ["step", "query"] + [f"rewrite_{i+1}" for i in range(max_rewrites)]
+
+        if not hasattr(self, "rewrite_table"):
+            self.rewrite_table = wandb.Table(columns=columns)
+
+        # Create new table with existing data
+        new_table = wandb.Table(columns=columns, data=self.rewrite_table.data)
+
+        # Add rows for each query
+        for query, query_rewrites in zip(queries, rewrites):
+            row_data = [step, query]
+            # Add all rewrites for this query
+            row_data.extend(query_rewrites)
+            # Pad with empty strings if this query has fewer rewrites than max
+            while len(row_data) < len(columns):
+                row_data.append("")
+            new_table.add_data(*row_data)
+
+        # Update reference and log
+        wandb.log({"train/query_rewrites": new_table}, step=step)
+        self.rewrite_table = new_table
+
+    def log_rewrites_to_console(self, queries, rewrites, step):
+        """Log rewrites to console for debugging"""
+        print("\n" + "=" * 100)
+        print(f"QUERY REWRITES @ STEP {step}")
+        print("=" * 100)
+        for i, (query, query_rewrites) in enumerate(zip(queries, rewrites)):
+            print(f"\n[Query {i+1}] {query}")
+            for j, rewrite in enumerate(query_rewrites):
+                print(f"  [Rewrite {j+1}] {rewrite}")
+        print("=" * 100 + "\n")
+
+
 class ValidationGenerationsLogger:
     def log(self, loggers, samples, step):
         if "wandb" in loggers:

@@ -38,7 +38,7 @@ from verl.utils.metric import (
 )
 from verl.utils.seqlen_balancing import get_seqlen_balanced_partitions, log_seqlen_unbalance
 from verl.utils.torch_functional import masked_mean
-from verl.utils.tracking import ValidationGenerationsLogger
+from verl.utils.tracking import ValidationGenerationsLogger, RewriteLogger
 from verl.workers.rollout.async_server import AsyncLLMServerManager
 
 WorkerType = Type[Worker]
@@ -435,6 +435,7 @@ class RayPPOTrainer:
         self.use_rm = Role.RewardModel in role_worker_mapping
         self.ray_worker_group_cls = ray_worker_group_cls
         self.validation_generations_logger = ValidationGenerationsLogger()
+        self.rewrite_logger = RewriteLogger()
 
         # define in-reward KL control
         # kl loss control currently not suppoorted
@@ -1117,6 +1118,42 @@ class RayPPOTrainer:
                     batch = batch.repeat(repeat_times=self.config.actor_rollout_ref.rollout.n, interleave=True)
                     batch = batch.union(gen_batch_output)
 
+                    # Log query rewrites periodically
+                    log_rewrite_freq = self.config.trainer.get("log_rewrite_freq", 0)
+                    if log_rewrite_freq > 0 and self.global_steps % log_rewrite_freq == 0:
+                        log_num_queries = self.config.trainer.get("log_num_queries", 5)
+                        log_num_rewrites = self.config.trainer.get("log_num_rewrites", self.config.actor_rollout_ref.rollout.n)
+
+                        # Get original queries
+                        prompts = batch.batch["prompts"][:log_num_queries * log_num_rewrites]
+                        prompt_texts = [self.tokenizer.decode(p, skip_special_tokens=True) for p in prompts]
+
+                        # Get rewrites (responses)
+                        responses = batch.batch["responses"][:log_num_queries * log_num_rewrites]
+                        response_texts = [self.tokenizer.decode(r, skip_special_tokens=True) for r in responses]
+
+                        # Group rewrites by query (every n consecutive responses belong to same query)
+                        queries_to_log = []
+                        rewrites_to_log = []
+                        n_rewrites = self.config.actor_rollout_ref.rollout.n
+
+                        for i in range(log_num_queries):
+                            start_idx = i * n_rewrites
+                            end_idx = start_idx + min(log_num_rewrites, n_rewrites)
+                            if start_idx < len(response_texts):
+                                # Use the first prompt text as the query (they should all be the same for a group)
+                                queries_to_log.append(prompt_texts[start_idx])
+                                # Collect the rewrites for this query
+                                rewrites_to_log.append(response_texts[start_idx:end_idx])
+
+                        if queries_to_log:
+                            self.rewrite_logger.log(
+                                loggers=self.config.trainer.logger,
+                                queries=queries_to_log,
+                                rewrites=rewrites_to_log,
+                                step=self.global_steps
+                            )
+
                     batch.batch["response_mask"] = compute_response_mask(batch)
                     # balance the number of valid tokens on each dp rank.
                     # Note that this breaks the order of data inside the batch.
@@ -1371,7 +1408,9 @@ class RayPPOTrainer:
                     # validate
                     
                     if self.val_reward_fn is not None and self.config.trainer.test_freq > 0 and (is_last_step or self.global_steps % self.config.trainer.test_freq == 0):
+                        print("Start timer...")
                         with _timer("testing", timing_raw):
+                            print("Validating...")
                             val_metrics: dict = self._validate()
                             if is_last_step:
                                 last_val_metrics = val_metrics

@@ -12,7 +12,7 @@ def main():
     parser = argparse.ArgumentParser(description="Build FAISS Index from BEIR Dataset")
     parser.add_argument(
         "--beir-dataset",
-        default="datasets/fiqa",
+        default="datasets/msmarco",
         help="Path to BEIR dataset directory"
     )
     parser.add_argument(
@@ -40,12 +40,13 @@ def main():
     )
     parser.add_argument(
         "--device",
-        default="cpu",
+        default="cuda",
         choices=["cuda", "cpu"],
         help="Device for encoding"
     )
     parser.add_argument(
         "--output-dir",
+        default="datasets/msmarco/faiss_index",
         help="Output directory (defaults to same as beir-dataset)"
     )
 

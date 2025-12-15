@@ -1,6 +1,7 @@
 from typing import List, Literal, Optional, Tuple
 import numpy as np
 from pyserini.search.lucene import LuceneSearcher
+import os
 
 from .base_retriever import BaseRetriever
 
@@ -13,6 +14,7 @@ class Bm25Retriever(BaseRetriever):
         k1: float = 0.9,
         b: float = 0.4,
         id_mapping_path: Optional[str] = None,
+        num_threads: Optional[int] = None,
         verbose: bool = True
     ):
         super().__init__(id_mapping_path=id_mapping_path, verbose=verbose)
@@ -20,6 +22,11 @@ class Bm25Retriever(BaseRetriever):
         self.index_path = index_path
         self.k1 = k1
         self.b = b
+
+        # Default to number of CPUs if not specified
+        if num_threads is None:
+            num_threads = min(32, (os.cpu_count() or 1))
+        self.num_threads = num_threads
 
         if self.verbose:
             print(f"Loading BM25 index: {index_path}")
@@ -30,7 +37,8 @@ class Bm25Retriever(BaseRetriever):
         if self.verbose:
             print(f"BM25 parameters: k1={k1}, b={b}")
             print(f"Index size: {self.searcher.num_docs} documents")
-            print(f"BM25 Retriever ready!\n")
+            print(f"Number of search threads: {self.num_threads}")
+            print("BM25 Retriever ready!\n")
 
     def search(
         self,
@@ -39,76 +47,59 @@ class Bm25Retriever(BaseRetriever):
         **kwargs
     ) -> Tuple[np.ndarray, np.ndarray]:
         """
-        Search BM25 index for queries.
+        Batched BM25 search using Pyserini's built-in batch_search.
 
         Args:
             queries: List of query strings
-            k: Number of results to return per query
-            **kwargs: Additional arguments (ignored for BM25)
+            k: Number of results per query
 
         Returns:
-            Tuple of (scores, doc_ids) as np.ndarrays
-            - scores: shape (len(queries), k)
-            - doc_ids: shape (len(queries), k) - contains document IDs as strings
+            Tuple (scores, doc_ids):
+                - scores: np.ndarray of shape (len(queries), k)
+                - doc_ids: np.ndarray of shape (len(queries), k)
         """
-        all_scores = []
-        all_doc_ids = []
+        if len(queries) == 0:
+            return np.array([]), np.array([])
 
-        for query in queries:
-            hits = self.searcher.search(query, k=k)
+        qids = [str(i) for i in range(len(queries))]
 
-            # Extract scores and doc IDs
-            scores = np.zeros(k, dtype=np.float32)
-            doc_ids = np.empty(k, dtype=object)
+        batch_hits = self.searcher.batch_search(
+            queries=queries,
+            qids=qids,
+            k=k,
+            threads=self.num_threads
+        )
 
-            for i, hit in enumerate(hits):
-                scores[i] = hit.score
-                doc_ids[i] = hit.docid
+        scores = np.full((len(queries), k), -1.0, dtype=np.float32)
+        doc_ids = np.full((len(queries), k), "-1", dtype=object)
 
-            # Pad with -1 if fewer than k results
-            if len(hits) < k:
-                scores[len(hits):] = -1.0
-                doc_ids[len(hits):] = "-1"
+        for qi, qid in enumerate(qids):
+            hits = batch_hits.get(qid, [])
+            for j, hit in enumerate(hits):
+                scores[qi, j] = hit.score
+                doc_ids[qi, j] = hit.docid
 
-            all_scores.append(scores)
-            all_doc_ids.append(doc_ids)
-
-        scores_array = np.array(all_scores, dtype=np.float32)
-        doc_ids_array = np.array(all_doc_ids, dtype=object)
-
-        return scores_array, doc_ids_array
+        return scores, doc_ids
 
     def map_indices_to_ids(self, indices: np.ndarray) -> np.ndarray:
         """
         For BM25, indices are already document IDs (strings).
-        This method is kept for interface compatibility.
-
-        Args:
-            indices: Document IDs from search (already mapped)
-
-        Returns:
-            Document IDs (same as input for BM25)
         """
-        # BM25 already returns document IDs, not internal indices
-        # But if id_mapping is provided, we can still apply it
         if self.id_mapping is None:
             return indices
 
-        # Apply mapping if provided
         mapped_ids = np.zeros_like(indices, dtype=object)
         for i in range(indices.shape[0]):
             for j in range(indices.shape[1]):
                 doc_id = indices[i, j]
                 if doc_id != "-1":
                     try:
-                        # Try to use as integer index into mapping
                         idx = int(doc_id)
                         if 0 <= idx < len(self.id_mapping):
                             mapped_ids[i, j] = self.id_mapping[idx]
                         else:
                             mapped_ids[i, j] = doc_id
                     except (ValueError, TypeError):
-                        # If not an integer, use as-is
                         mapped_ids[i, j] = doc_id
                 else:
                     mapped_ids[i, j] = "-1"
@@ -122,9 +113,10 @@ class Bm25Retriever(BaseRetriever):
         mode: Literal["union", "intersection", "first"] = "union",
         **kwargs
     ) -> List[dict]:
-        flat_rewrites = []
-        mapping = []
-
+        """
+        Retrieve documents for batches of query rewrites using batched BM25 search.
+        """
+        flat_rewrites, mapping = [], []
         for qi, rewrites in enumerate(query_rewrites):
             for ri, r in enumerate(rewrites):
                 flat_rewrites.append(r)
@@ -148,7 +140,6 @@ class Bm25Retriever(BaseRetriever):
             })
 
         results = []
-
         for qi, rewrites in enumerate(query_rewrites):
             if len(rewrites) == 0:
                 results.append({
@@ -182,14 +173,12 @@ class Bm25Retriever(BaseRetriever):
                 merged_doc_ids = np.array([d for d, _ in sorted_docs[:k]], dtype=object)
                 merged_scores = np.array([s for _, s in sorted_docs[:k]], dtype=np.float32)
 
-            else:
+            else:  # union
                 doc_to_scores = {}
                 for r in per_rw:
                     for doc_id, score in zip(r["doc_ids"], r["scores"]):
                         if doc_id != "-1":
-                            if doc_id not in doc_to_scores:
-                                doc_to_scores[doc_id] = []
-                            doc_to_scores[doc_id].append(score)
+                            doc_to_scores.setdefault(doc_id, []).append(score)
 
                 doc_mean = {doc: np.mean(vals) for doc, vals in doc_to_scores.items()}
                 sorted_docs = sorted(doc_mean.items(), key=lambda x: x[1], reverse=True)
@@ -211,42 +200,27 @@ class Bm25Retriever(BaseRetriever):
 
 
 if __name__ == "__main__":
-    # Example usage
-    print("=" * 80)
-    print("Testing BM25 Retriever Class")
-    print("=" * 80)
-
-    # This assumes you have a Pyserini index
-    # Update this path to your actual index
     retriever = Bm25Retriever(
         index_path="datasets/msmarco/bm25_index",
         k1=0.9,
         b=0.4
     )
 
-    # Test with multiple rewrites per query
     query_rewrites = [
         ["capital of france", "france capital city", "paris location"],
         ["deep learning", "neural networks", "machine learning"]
     ]
 
-    print("\n" + "=" * 80)
-    print("Testing UNION mode (default)")
-    print("=" * 80)
+    print("=== UNION mode ===")
     results = retriever.retrieve_batch(query_rewrites, k=5, mode="union")
-
     for i, result in enumerate(results):
-        print(f"\nQuery {i+1}: {query_rewrites[i]}")
-        print(f"  Merged Top-5 Doc IDs: {result['doc_ids'][:5]}")
-        print(f"  Merged Scores: {result['scores'][:5]}")
-        print(f"  Number of rewrites: {len(result['rewrite_results'])}")
+        print(f"Query {i+1}: {query_rewrites[i]}")
+        print(f"Top Docs: {result['doc_ids'][:5]}")
+        print(f"Scores: {result['scores'][:5]}")
 
-    print("\n" + "=" * 80)
-    print("Testing INTERSECTION mode")
-    print("=" * 80)
+    print("\n=== INTERSECTION mode ===")
     results = retriever.retrieve_batch(query_rewrites, k=5, mode="intersection")
-
     for i, result in enumerate(results):
-        print(f"\nQuery {i+1}: {query_rewrites[i]}")
-        print(f"  Common Doc IDs: {result['doc_ids'][:5]}")
-        print(f"  Scores: {result['scores'][:5]}")
+        print(f"Query {i+1}: {query_rewrites[i]}")
+        print(f"Common Docs: {result['doc_ids'][:5]}")
+        print(f"Scores: {result['scores'][:5]}")
