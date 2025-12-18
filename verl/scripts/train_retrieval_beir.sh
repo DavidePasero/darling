@@ -1,28 +1,48 @@
 #!/bin/bash
-# BEIR Retrieval Training - Quality Only (No Diversity)
-# Uses BEIR format datasets (msmarco, nfcorpus, scifact, etc.)
+#SBATCH --job-name=TRAIN_DARLING_FAISS
+#SBATCH --partition=gpu_h100
+#SBATCH --nodes=1
+#SBATCH --gpus-per-node=1
+#SBATCH --cpus-per-task=12
+#SBATCH --time=00:05:00
+#SBATCH --output=logs/darling_retrieval_%j.out
+#SBATCH --error=logs/darling_retrieval_%j.err
 
-set -x
+module purge
+module load 2023
+module load Anaconda3/2023.07-2
+
+eval "$(conda shell.bash hook)"
+conda activate verlenv
+
+USER=davide
+
+# Fixes loading code from partition classifier
+cd darling_${USER}/verl
+export PYTHONPATH="${PWD}:${PYTHONPATH}"
+pip install -e .
 
 # Enable Ray debug mode for breakpoint debugging (set to 0 for production)
 export RAY_DEBUG_MODE=0
 
-BEIR_DATASET="figa"
-BEIR_DIR="datasets/${BEIR_DATASET}"
-9TRAIN_QRELS="${BEIR_DIR}/qrels/train.tsv"
+BEIR_DATASET="fiqa"
+BEIR_DIR="${HOME}/scratch_shared/${BEIR_DATASET}"
+TRAIN_QRELS="${BEIR_DIR}/qrels/train.tsv"
 DEV_QRELS="${BEIR_DIR}/qrels/dev.tsv"
-QRELS_FILE="qrels/train.tsv"
+QUERIES_FILE="${BEIR_DIR}/queries.jsonl"
 
 RETRIEVER_TYPE="faiss"
-FAISS_INDEX="${BEIR_DIR}/faiss_index.faiss"
-FAISS_ID_MAPPING="${BEIR_DIR}/id_mapping.pkl"
+# FAISS
+FAISS_INDEX="${BEIR_DIR}/faiss_index/faiss_index.faiss"
+FAISS_ID_MAPPING="${BEIR_DIR}/faiss_index/id_mapping.pkl"
 EMBEDDING_MODEL="Qwen/Qwen3-Embedding-0.6B"
+# BM25
 BM25_INDEX="${BEIR_DIR}/bm25_index/index"
 BM25_ID_MAPPING="${BEIR_DIR}/bm25_index/id_mapping.pkl"
 BM25_K1=0.9
 BM25_B=0.4
 
-MODEL_PATH="Qwen/Qwen2.5-0.5B-Instruct"
+ACTOR_PATH="Qwen/Qwen2.5-0.5B-Instruct"
 BATCH_SIZE=8
 N_REWRITES=2
 MAX_PROMPT_LEN=128
@@ -46,7 +66,7 @@ else
     exit 1
 fi
 
-PROJECT_NAME="beir_retrieval"
+PROJECT_NAME="beir_retrieval_faiss"
 EXPERIMENT_NAME="${BEIR_DATASET}_${RETRIEVER_TYPE}_${QUALITY_METHOD}@${K}"
 CHECKPOINT_DIR="./checkpoints/${PROJECT_NAME}/${EXPERIMENT_NAME}"
 
@@ -62,7 +82,7 @@ python3 -m verl.trainer.main_ppo \
     data.max_response_length=${MAX_RESPONSE_LEN} \
     data.filter_overlong_prompts=True \
     data.truncation='error' \
-    actor_rollout_ref.model.path=${MODEL_PATH} \
+    actor_rollout_ref.model.path=${ACTOR_PATH} \
     actor_rollout_ref.model.use_remove_padding=False \
     actor_rollout_ref.model.enable_gradient_checkpointing=True \
     +actor_rollout_ref.model.use_flash_attn=False \
@@ -103,7 +123,6 @@ python3 -m verl.trainer.main_ppo \
     +reward_model.bm25_b=${BM25_B} \
     +reward_model.id_mapping_path=${ID_MAPPING} \
     +reward_model.beir_dataset_path=${BEIR_DIR} \
-    +reward_model.qrels_file=${QRELS_FILE} \
     +reward_model.quality_method=${QUALITY_METHOD} \
     +reward_model.k=${K} \
     +reward_model.embedding_model=${EMBEDDING_MODEL} \

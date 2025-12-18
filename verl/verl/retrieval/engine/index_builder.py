@@ -1,22 +1,28 @@
-import sys
+import os
 import json
 import pickle
-import subprocess
-from pathlib import Path
-from typing import List, Literal, Optional
 import numpy as np
+import torch
+import faiss
+import subprocess
+import shutil
+from pathlib import Path
+from typing import Literal, Optional
 from tqdm import tqdm
+from torch.utils.data import DataLoader, Dataset
+from sentence_transformers import SentenceTransformer
 from verl.retrieval.engine.document_dataset import BeirAdapter
 
+class StringDataset(Dataset):
+    def __init__(self, data):
+        self.data = data
+    def __len__(self):
+        return len(self.data)
+    def __getitem__(self, idx):
+        return self.data[idx]
 
 class IndexBuilder:
-
-    def __init__(
-        self,
-        index_type: Literal["faiss", "bm25"],
-        output_dir: Path,
-        verbose: bool = True
-    ):
+    def __init__(self, index_type: Literal["faiss", "bm25"], output_dir: Path, verbose: bool = True):
         self.index_type = index_type
         self.output_dir = Path(output_dir)
         self.output_dir.mkdir(parents=True, exist_ok=True)
@@ -28,193 +34,157 @@ class IndexBuilder:
         embedding_model: Optional[str] = None,
         faiss_nlist: int = 4096,
         faiss_m: int = 32,
-        bm25_threads: int = 8,
         batch_size: int = 128,
+        bm25_threads: int = 8,
         device: str = "cuda"
     ):
         if self.verbose:
-            print("=" * 80)
-            print(f"Building {self.index_type.upper()} Index from BEIR Dataset")
-            print("=" * 80)
-            print(f"Dataset: {beir_dataset_path}")
-            print(f"Output: {self.output_dir}")
-
+            print(f"Loading BEIR dataset: {beir_dataset_path}")
+        
+        # Load Data
         adapter = BeirAdapter(data_path=beir_dataset_path, split="train")
-        dataset = adapter.to_unified()
-
-        corpus_ids = list(dataset.corpus.keys())
-        corpus_texts = dataset.corpus
-
-        if self.verbose:
-            print(f"Loaded {len(corpus_texts)} documents")
+        dataset_unified = adapter.to_unified()
+        corpus_ids = list(dataset_unified.corpus.keys())
+        corpus_texts = list(dataset_unified.corpus.values())
 
         if self.index_type == "faiss":
-            if embedding_model is None:
-                raise ValueError("embedding_model must be provided for FAISS index")
-
+            if not embedding_model:
+                raise ValueError("embedding_model is required for FAISS index")
+            
             self._build_faiss_index(
-                corpus_texts=corpus_texts,
-                corpus_ids=corpus_ids,
-                embedding_model=embedding_model,
-                nlist=faiss_nlist,
-                m=faiss_m,
-                batch_size=batch_size,
-                device=device
+                corpus_texts, corpus_ids, embedding_model, 
+                faiss_nlist, faiss_m, batch_size, device
             )
-
+        
         elif self.index_type == "bm25":
             self._build_bm25_index(
-                corpus_texts=corpus_texts,
-                corpus_ids=corpus_ids,
-                threads=bm25_threads
+                dataset_unified.corpus, corpus_ids, bm25_threads
             )
-
         else:
             raise ValueError(f"Unknown index_type: {self.index_type}")
 
-        if self.verbose:
-            print("\n" + "=" * 80)
-            print("Index Build Complete")
-            print("=" * 80)
+    def _build_faiss_index(self, corpus_texts, corpus_ids, embedding_model, nlist, m, batch_size, device):
+        print(f"🚀 Initializing Model: {embedding_model} on {device}")
+        
+        model = SentenceTransformer(embedding_model, device=device, trust_remote_code=True)
+        
+        # --- FIX 1: FORCE TRUNCATION ---
+        # Qwen defaults to huge context. We clamp it to 512 to prevent OOM.
+        model.max_seq_length = 512 
+        model.eval()
+        
+        dimension = model.get_sentence_embedding_dimension()
+        print(f"   Model Context Limit: {model.max_seq_length} tokens")
+        print(f"   Model Dimension: {dimension}")
 
-    def _build_faiss_index(
-        self,
-        corpus_texts: dict,
-        corpus_ids: list,
-        embedding_model: str,
-        nlist: int,
-        m: int,
-        batch_size: int,
-        device: str
-    ):
-        embeddings_cache_path = self.output_dir / "embeddings_cache.npy"
+        if dimension % m != 0:
+            raise ValueError(f"Dimension ({dimension}) must be divisible by m ({m}).")
 
-        if embeddings_cache_path.exists():
-            if self.verbose:
-                print(f"\nLoading cached embeddings from: {embeddings_cache_path}")
-            embeddings = np.load(embeddings_cache_path)
-            if self.verbose:
-                print(f"Loaded embeddings shape: {embeddings.shape}")
-        else:
-            if self.verbose:
-                print(f"\nLoading embedding model: {embedding_model}")
-
-            from sentence_transformers import SentenceTransformer
-            import torch
-
-            model = SentenceTransformer(
-                embedding_model,
-                device=device,
-                trust_remote_code=True
-            )
-            model.eval()
-
-            if self.verbose:
-                print(f"Encoding {len(corpus_texts)} documents with batch size {batch_size}")
-
-            corpus_text_list = [corpus_texts[doc_id] for doc_id in corpus_ids]
-            embeddings = []
-
-            for i in tqdm(range(0, len(corpus_text_list), batch_size), disable=not self.verbose):
-                batch = corpus_text_list[i:i + batch_size]
-                with torch.no_grad():
-                    batch_embeddings = model.encode(
-                        batch,
-                        batch_size=batch_size,
-                        show_progress_bar=False,
-                        convert_to_numpy=True,
-                        normalize_embeddings=True
-                    )
-                embeddings.append(batch_embeddings)
-
-            embeddings = np.vstack(embeddings).astype('float32')
-
-            if self.verbose:
-                print(f"\nSaving embeddings cache to: {embeddings_cache_path}")
-            np.save(embeddings_cache_path, embeddings)
-
-        if self.verbose:
-            print(f"Encoded embeddings shape: {embeddings.shape}")
-            print(f"\nBuilding FAISS index:")
-            print(f"  Dimension: {embeddings.shape[1]}")
-            print(f"  Num docs: {embeddings.shape[0]}")
-            print(f"  IVF nlist: {nlist}")
-            print(f"  PQ m: {m}")
-
-        import faiss
-        import torch
-        dimension = embeddings.shape[1]
-        quantizer = faiss.IndexFlatIP(dimension)
-        index = faiss.IndexIVFPQ(quantizer, dimension, nlist, m, 8)
-
-        if self.verbose:
-            print("Training FAISS index...")
-
-        use_gpu = device == "cuda" and torch.cuda.is_available()
-        if use_gpu:
-            if self.verbose:
-                print("Using GPU for training")
+        try:
             res = faiss.StandardGpuResources()
-            gpu_index = faiss.index_cpu_to_gpu(res, 0, index)
-            gpu_index.train(embeddings)
-            index = faiss.index_gpu_to_cpu(gpu_index)
-        else:
-            if self.verbose:
-                print("Using CPU for training")
-            index.train(embeddings)
+            # Reduce temp memory overhead
+            res.setTempMemory(512 * 1024 * 1024) 
+        except AttributeError:
+            print("⚠️ FAISS-GPU not found.")
+            return
 
-        if self.verbose:
-            print("Adding vectors to index...")
-        index.add(embeddings)
+        print(f"   Configuring Index (d={dimension}, nlist={nlist}, m={m})")
+        quantizer = faiss.IndexFlatIP(dimension)
+        cpu_index = faiss.IndexIVFPQ(quantizer, dimension, nlist, m, 8, faiss.METRIC_INNER_PRODUCT)
+        
+        co = faiss.GpuClonerOptions()
+        co.useFloat16 = True
+        co.useFloat16LookupTables = True
 
+        print("   Moving index configuration to GPU...")
+        gpu_index = faiss.index_cpu_to_gpu(res, 0, cpu_index, co)
+
+        dataset_obj = StringDataset(corpus_texts)
+        def collate_fn(batch):
+            return model.tokenize(batch)
+
+        # 1. Train Phase
+        train_size = min(len(corpus_texts), 50000)
+        print(f"   Training Index on random sample of {train_size} docs...")
+        
+        train_loader = DataLoader(
+            dataset_obj,
+            batch_size=batch_size,
+            sampler=torch.utils.data.RandomSampler(dataset_obj, replacement=True, num_samples=train_size),
+            num_workers=4,
+            collate_fn=collate_fn,
+            persistent_workers=True,
+            prefetch_factor=2
+        )
+
+        train_vectors = []
+        with torch.no_grad():
+            for batch in tqdm(train_loader, desc="Encoding Train"):
+                batch = {k: v.to(device) for k, v in batch.items()}
+                emb = model(batch)["sentence_embedding"]
+                emb = torch.nn.functional.normalize(emb, p=2, dim=1)
+                
+                # --- FIX 2: OFFLOAD TO CPU IMMEDIATELY ---
+                # We move embeddings to CPU RAM to save VRAM for the next batch
+                train_vectors.append(emb.cpu())
+        
+        # Concat on CPU
+        train_vectors_np = torch.cat(train_vectors).numpy().astype("float32")
+        
+        # FAISS GPU train can handle CPU inputs (it copies internally)
+        gpu_index.train(train_vectors_np)
+        
+        # Cleanup
+        del train_vectors, train_vectors_np
+        torch.cuda.empty_cache()
+
+        # 2. Add Phase (Streaming)
+        print(f"   Indexing {len(corpus_texts)} documents...")
+        full_loader = DataLoader(
+            dataset_obj, 
+            batch_size=batch_size, 
+            shuffle=False, 
+            num_workers=4, 
+            collate_fn=collate_fn,
+            prefetch_factor=2
+        )
+
+        with torch.no_grad():
+            for batch in tqdm(full_loader, desc="Indexing"):
+                batch = {k: v.to(device) for k, v in batch.items()}
+                emb = model(batch)["sentence_embedding"]
+                emb = torch.nn.functional.normalize(emb, p=2, dim=1)
+                
+                # Add directly to GPU index
+                gpu_index.add(emb.cpu().numpy().astype("float32"))
+
+        print("   Moving index to CPU for saving...")
+        final_cpu_index = faiss.index_gpu_to_cpu(gpu_index)
+        
         index_path = self.output_dir / "faiss_index.faiss"
         id_mapping_path = self.output_dir / "id_mapping.pkl"
-
-        if self.verbose:
-            print(f"\nSaving index to: {index_path}")
-        faiss.write_index(index, str(index_path))
-
-        if self.verbose:
-            print(f"Saving ID mapping to: {id_mapping_path}")
+        
+        faiss.write_index(final_cpu_index, str(index_path))
         with open(id_mapping_path, 'wb') as f:
             pickle.dump(corpus_ids, f)
+            
+        print(f"✅ FAISS Index built at: {self.output_dir}")
 
-    def _build_bm25_index(
-        self,
-        corpus_texts: dict,
-        corpus_ids: list,
-        threads: int
-    ):
-        # Create a dedicated directory for the JSONL file to avoid indexing other files in output_dir
+    def _build_bm25_index(self, corpus_texts, corpus_ids, threads):
+        # (Same as before)
         jsonl_dir = self.output_dir / "corpus_jsonl"
         jsonl_dir.mkdir(parents=True, exist_ok=True)
         jsonl_file = jsonl_dir / "corpus.jsonl"
-        
-        index_path = self.output_dir / "index"
+        index_path = self.output_dir / "bm25_index"
         id_mapping_path = self.output_dir / "id_mapping.pkl"
 
-        if self.verbose:
-            print(f"\nConverting corpus to Pyserini JSONL format")
-            print(f"Output: {jsonl_file}")
-
-        num_docs = 0
+        print(f"   Converting {len(corpus_ids)} docs to Pyserini JSONL format...")
         with open(jsonl_file, 'w', encoding='utf-8') as f:
             for doc_id in corpus_ids:
-                doc = {
-                    "id": doc_id,
-                    "contents": corpus_texts[doc_id]
-                }
+                doc = {"id": doc_id, "contents": corpus_texts[doc_id]}
                 f.write(json.dumps(doc, ensure_ascii=False) + '\n')
-                num_docs += 1
 
-        if self.verbose:
-            print(f"Wrote {num_docs} documents to {jsonl_file}")
-            print(f"\nBuilding Pyserini/Lucene index")
-            print(f"Index: {index_path}")
-            print(f"Threads: {threads}")
-
-        index_path.mkdir(parents=True, exist_ok=True)
-
+        print(f"   Running Pyserini/Lucene Indexer (Threads: {threads})...")
         cmd = [
             "python", "-m", "pyserini.index.lucene",
             "--collection", "JsonCollection",
@@ -222,31 +192,11 @@ class IndexBuilder:
             "--index", str(index_path),
             "--generator", "DefaultLuceneDocumentGenerator",
             "--threads", str(threads),
-            "--storePositions",
-            "--storeDocvectors",
-            "--storeRaw"
+            "--storePositions", "--storeDocvectors", "--storeRaw"
         ]
 
-        if self.verbose:
-            print(f"\nRunning command:")
-            print(" ".join(cmd))
-            print()
-
-        result = subprocess.run(cmd, check=True, capture_output=True, text=True)
-
-        if self.verbose:
-            print(result.stdout)
-            if result.stderr:
-                print("Stderr:", result.stderr)
-
-        if self.verbose:
-            print(f"\nSaving ID mapping to: {id_mapping_path}")
+        subprocess.run(cmd, check=True)
+        shutil.rmtree(jsonl_dir)
         with open(id_mapping_path, 'wb') as f:
             pickle.dump(corpus_ids, f)
-
-        # jsonl_file.unlink()
-        import shutil
-        shutil.rmtree(jsonl_dir)
-
-        if self.verbose:
-            print(f"Removed intermediate JSONL file: {jsonl_file}")
+        print(f"✅ BM25 Index built at: {index_path}")

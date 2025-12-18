@@ -117,9 +117,9 @@ def test_retrieval(
 
     if retriever_type == "faiss":
         if faiss_index_path is None:
-            faiss_index_path = f"{beir_dataset_path}/faiss/index"
+            faiss_index_path = f"{beir_dataset_path}/faiss_index/faiss_index.faiss"
         if faiss_id_mapping_path is None:
-            faiss_id_mapping_path = f"{beir_dataset_path}/faiss/docid"
+            faiss_id_mapping_path = f"{beir_dataset_path}/faiss_index/id_mapping.pkl"
 
         print(f"FAISS index: {faiss_index_path}")
         print(f"ID mapping: {faiss_id_mapping_path}")
@@ -168,7 +168,7 @@ def test_retrieval(
         if use_vllm:
             print(f"Processing batch {i} with vLLM...")
             
-            # 1. Generate Rewrites
+            # Generate Rewrites
             batch_rewrites = generate_rewrites_batch(
                 batch_queries, 
                 port=vllm_port, 
@@ -177,15 +177,12 @@ def test_retrieval(
                 model_name=model_name
             )
             
-            # 2. Retrieve using retrieve_batch
-            if retriever_type == "bm25":
-                batch_results = retriever.retrieve_batch(
-                    query_rewrites=batch_rewrites,
-                    k=k,
-                    mode="union"
-                )
-            else:
-                raise NotImplementedError("LLM rewrite workflow currently only supports BM25 retriever.")
+            # Retrieve using retrieve_batch
+            batch_results = retriever.retrieve_batch(
+                query_rewrites=batch_rewrites,
+                k=k,
+                mode="union"
+            )
 
             # 3. Extract IDs
             for res in batch_results:

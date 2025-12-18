@@ -4,7 +4,7 @@
 #SBATCH --nodes=1
 #SBATCH --gpus-per-node=1
 #SBATCH --cpus-per-task=12
-#SBATCH --time=00:30:00
+#SBATCH --time=00:40:00
 #SBATCH --output=logs/try_retriever_%j.out
 #SBATCH --error=logs/try_retriever_%j.err
 
@@ -21,7 +21,7 @@ CHECKPOINT_DIR=/home/scur1900/scratch_shared/merged_checkpoints
 LOGDIR="/home/scur1900/logs/vllm_eval"
 
 ACTOR_PATH=/home/scur1900/scratch_shared/scratch-shared-alisia/merged/global_step_250_llama_instruct/actor
-ACTOR_NAME=darling_trained_bm25
+ACTOR_NAME=darling_trained_faiss
 
 VLLM_LOG="$LOGDIR/vllm_eval_actor_${SLURM_JOB_ID}.log"
 VLLM_PORT=8000
@@ -34,6 +34,7 @@ apptainer exec --nv -B $PWD $CONTAINER bash -lc "
     --model $ACTOR_PATH \
     --served-model-name $ACTOR_NAME \
     --dtype float16 \
+    --gpu-memory-utilization 0.5
     --max-model-len 8192 \
     --port $VLLM_PORT \
     --host 0.0.0.0
@@ -46,13 +47,14 @@ for i in {1..120}; do
   sleep 2
 done
 
+DATASET_PATH=/home/scur1900/scratch_shared/fiqa
 
-python /home/scur1900/darling_lukas/verl/scripts/test_retrieval_system.py \
- --beir-dataset /home/scur1900/scratch_shared/msmarco \
- --retriever-type bm25 --device cuda --embedding-model "Qwen/Qwen3-Embedding-0.6B" \
+python /home/scur1900/darling_davide/verl/scripts/test_retrieval_system.py \
+ --beir-dataset $DATASET_PATH \
+ --retriever-type faiss --device cuda --embedding-model "Qwen/Qwen3-Embedding-0.6B" \
  --model-name $ACTOR_NAME \
  --use-vllm \
  --vllm-port $VLLM_PORT \
  --num-rewrites 5 \
- --faiss-index ~/scratch_shared/fiqa/faiss_index/embeddings_cache.npy \
- --faiss-id-mapping ~/scratch_shared/msmarco/id_mapping.pkl \
+ --faiss-index $DATASET_PATH/faiss_index/faiss_index.faiss \
+ --faiss-id-mapping $DATASET_PATH/faiss_index/id_mapping.pkl \

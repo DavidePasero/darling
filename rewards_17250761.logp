@@ -1,5 +1,0 @@
-Loading input from athene_test.json
-Loaded 3 prompt-response pairs
-Loading Athene reward model from Nexusflow/Athene-RM-8B
-Model loaded successfully
-Computing rewards...
