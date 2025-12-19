@@ -1,4 +1,5 @@
-﻿# DARLING
+﻿
+# DARLING
 This is the official implementation of the paper [Jointly Reinforcing Diversity and Quality of Language Model Generations](https://arxiv.org/abs/2509.02534).
 
 ## Getting Started for Training

@@ -1,0 +1,175 @@
+# Configuration for query rewriting with GRPO + Retrieval Rewards
+# This config combines quality (NDCG/Recall) with diversity rewards for query rewriting
+
+data:
+  tokenizer: null
+  train_files: ~/data/msmarco/train.parquet  # MS MARCO training data
+  val_files: ~/data/msmarco/dev.parquet
+  prompt_key: prompt  # Column with original query
+  reward_fn_key: data_source
+  max_prompt_length: 128  # Queries are short
+  max_response_length: 128  # Rewrites are also short
+  train_batch_size: 512
+  val_batch_size: 256
+  return_raw_input_ids: False
+  return_raw_chat: False
+  return_full_prompt: False
+  shuffle: True
+  filter_overlong_prompts: False
+  filter_overlong_prompts_workers: 1
+  truncation: error
+  custom_cls:
+      path: null
+      name: null
+
+actor_rollout_ref:
+  hybrid_engine: True
+  model:
+    path: Qwen/Qwen2.5-0.5B  # Small model for fast iteration
+    external_lib: null
+    override_config: { }
+    enable_gradient_checkpointing: True
+    use_remove_padding: False
+    use_liger: False
+    use_fused_kernels: False
+    trust_remote_code: False
+  actor:
+    strategy: fsdp
+    ppo_mini_batch_size: 128
+    ppo_micro_batch_size_per_gpu: null
+    use_dynamic_bsz: False
+    ppo_max_token_len_per_gpu: 8192
+    grad_clip: 1.0
+    clip_ratio: 0.2
+    clip_ratio_low: 0.2
+    clip_ratio_high: 0.2
+    clip_ratio_c: 3.0
+    loss_agg_mode: "token-mean"
+    entropy_coeff: 0
+    use_kl_loss: True  # Enable for GRPO
+    use_torch_compile: True
+    kl_loss_coef: 0.001
+    kl_loss_type: low_var_kl
+    ppo_epochs: 1
+    shuffle: False
+    ulysses_sequence_parallel_size: 1
+    checkpoint:
+      contents: ['model', 'optimizer', 'extra']
+    optim:
+      lr: 1e-6
+      lr_warmup_steps: -1
+      lr_warmup_steps_ratio: 0.1
+      min_lr_ratio: 0.0
+      num_cycles: 0.5
+      warmup_style: constant
+      total_training_steps: -1
+      weight_decay: 0.01
+    fsdp_config:
+      wrap_policy:
+        min_num_params: 0
+      param_offload: False
+      optimizer_offload: False
+      offload_policy: False
+      reshard_after_forward: True
+      fsdp_size: -1
+  ref:
+    strategy: fsdp
+    fsdp_config:
+      param_offload: False
+      reshard_after_forward: True
+      wrap_policy:
+        min_num_params: 0
+    use_torch_compile: ${actor_rollout_ref.actor.use_torch_compile}
+    log_prob_micro_batch_size_per_gpu: null
+    log_prob_use_dynamic_bsz: ${actor_rollout_ref.actor.use_dynamic_bsz}
+    log_prob_max_token_len_per_gpu: ${actor_rollout_ref.actor.ppo_max_token_len_per_gpu}
+    ulysses_sequence_parallel_size: ${actor_rollout_ref.actor.ulysses_sequence_parallel_size}
+  rollout:
+    name: vllm
+    mode: sync
+    chat_scheduler: null
+    temperature: 0.7  # Encourage diversity in query rewrites
+    top_k: -1
+    top_p: 1.0
+    use_fire_sampling: False
+    prompt_length: ${data.max_prompt_length}
+    response_length: ${data.max_response_length}
+    n: 8  # Generate 8 rewrites per query for diversity calculation
+    top_p_min: 0.6
+    top_p_max: 0.9
+    gpu_memory_utilization: 0.5
+    tensor_parallel_size: 1
+    load_format: auto
+
+# Retrieval Reward Configuration
+reward_model:
+  enable: False  # We use rule-based retrieval rewards, not a learned RM
+  reward_manager: retrieval  # Use RetrievalRewardManager
+
+  # FAISS Infrastructure Paths
+  faiss_index_path: ~/data/msmarco/msmarco.faiss  # Pre-built FAISS index
+  id_mapping_path: ~/data/msmarco/id_mapping.pkl  # Maps FAISS indices to doc IDs
+  labels_path: ~/data/msmarco/labels.pkl  # Dict: {uid: [relevant_doc_ids]}
+
+  # Quality Reward Configuration
+  quality_method: ndcg  # Options: 'ndcg', 'recall', 'hit'
+  k: 10  # Top-k retrieval
+
+  # Diversity Configuration
+  diversity_enabled: True
+  diversity_method: local  # Options: 'local' (DeBERTa), 'vllm' (server-based)
+  deberta_model: microsoft/deberta-v3-large  # For local diversity
+  threshold: 0.5  # Similarity threshold for partitioning
+  device: cuda
+
+  # VLLM Diversity (if diversity_method: vllm)
+  # vllm_hostname: your-server.com  # Or set VLLM_SERVER_HOSTNAME env var
+  # num_vllm_servers: 8
+
+  # Embedding model for FAISS
+  embedding_model: Qwen/Qwen3-Embedding-8B
+
+  # Custom reward function
+  custom_diversity_function:
+    path: verl.utils.reward_score.retrieval_rewards
+    name: retrieval_reward
+
+  launch_reward_fn_async: False  # Set to True if using VLLM diversity
+
+algorithm:
+  gamma: 1.0
+  lam: 1.0
+  adv_estimator: grpo  # Group Relative Policy Optimization
+  norm_adv_by_std_in_grpo: True
+  use_kl_in_reward: False
+  kl_penalty: kl
+  kl_ctrl:
+    type: fixed
+    kl_coef: 0.001
+    horizon: 10000
+    target_kl: 0.1
+
+trainer:
+  balance_batch: True
+  total_epochs: 5
+  total_training_steps: null
+  project_name: retrieval-darling
+  experiment_name: qwen05b-msmarco-grpo-diversity
+  logger: [ 'console', 'wandb' ]
+  log_val_generations: 10  # Log some validation examples
+  rollout_data_dir: null
+  validation_data_dir: null
+  nnodes: 1
+  n_gpus_per_node: 8
+  save_freq: 100  # Save every 100 steps
+  resume_mode: auto
+  resume_from_path: null
+  val_before_train: True
+  test_freq: 100
+  critic_warmup: 0
+  default_hdfs_dir: null
+  del_local_ckpt_after_load: False
+  default_local_dir: checkpoints/${trainer.project_name}/${trainer.experiment_name}
+  max_actor_ckpt_to_keep: 3
+  max_critic_ckpt_to_keep: null
+  ray_wait_register_center_timeout: 300

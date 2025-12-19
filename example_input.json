@@ -1,0 +1,14 @@
+[
+  {
+    "prompt": "What is the capital of France?",
+    "generation": "The capital of France is Paris."
+  },
+  {
+    "prompt": "Explain the theory of relativity in simple terms.",
+    "generation": "The theory of relativity, developed by Albert Einstein, consists of two main parts: special and general relativity. Special relativity states that the laws of physics are the same for all observers moving at constant speeds, and that the speed of light is constant. General relativity extends this to include gravity, describing it as the curvature of spacetime caused by mass and energy."
+  },
+  {
+    "prompt": "Write a short poem about nature.",
+    "generation": "Trees whisper in the breeze,\nRivers flow with gentle ease,\nBirds sing melodies so bright,\nNature's beauty, pure delight."
+  }
+]

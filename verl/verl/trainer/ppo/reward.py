@@ -68,6 +68,10 @@ def load_reward_manager(config, tokenizer, num_examine, diversity=False, **rewar
         from verl.workers.reward_manager import DiversityRewardManager
 
         reward_manager_cls = DiversityRewardManager
+    elif reward_manager_name == "retrieval":
+        from verl.workers.reward_manager import RetrievalRewardManager
+
+        reward_manager_cls = RetrievalRewardManager
     else:
         raise NotImplementedError
 
@@ -89,12 +93,17 @@ def load_reward_manager(config, tokenizer, num_examine, diversity=False, **rewar
             else: # this is 1, 0
                 final_compute_score = _default_compute_score
 
+    # Merge config.reward_model params with reward_kwargs
+    # This allows parameters added with +reward_model.* to be passed through
+    all_reward_kwargs = dict(config.reward_model)
+    all_reward_kwargs.update(reward_kwargs)
+
     return reward_manager_cls(
         tokenizer=tokenizer,
         num_examine=num_examine,
         compute_score=final_compute_score,
         reward_fn_key=config.data.reward_fn_key,
-        **reward_kwargs,
+        **all_reward_kwargs,
     )
 
 

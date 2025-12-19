@@ -1,0 +1,111 @@
+{
+  "os": "Linux-5.14.0-427.92.1.el9_4.x86_64-x86_64-with-glibc2.34",
+  "python": "CPython 3.10.19",
+  "startedAt": "2025-12-07T15:51:10.377670Z",
+  "args": [
+    "--node-ip-address=145.136.62.159",
+    "--node-manager-port=41415",
+    "--object-store-name=/scratch-local/scur1900.17331752/ray/session_2025-12-07_16-49-52_168533_3745038/sockets/plasma_store",
+    "--raylet-name=/scratch-local/scur1900.17331752/ray/session_2025-12-07_16-49-52_168533_3745038/sockets/raylet",
+    "--redis-address=None",
+    "--metrics-agent-port=57963",
+    "--logging-rotate-bytes=536870912",
+    "--logging-rotate-backup-count=5",
+    "--runtime-env-agent-port=59323",
+    "--gcs-address=145.136.62.159:52110",
+    "--session-name=session_2025-12-07_16-49-52_168533_3745038",
+    "--temp-dir=/scratch-local/scur1900.17331752/ray",
+    "--webui=127.0.0.1:8265",
+    "--cluster-id=aae3be5dedc566e4bd8685b21c5630c3cdb40d8c93168eb7530b0b3f",
+    "--startup-token=64",
+    "--worker-launch-time-ms=1765122598164",
+    "--node-id=f78c825823dbcb9582d413b3cafb7958f956acf001461216f87f5948",
+    "--runtime-env-hash=-1053485826"
+  ],
+  "program": "/home/scur1900/.conda/envs/verlenv/lib/python3.10/site-packages/ray/_private/workers/default_worker.py",
+  "git": {
+    "remote": "git@github.com:DavidePasero/darling.git",
+    "commit": "3eca1ec02661e540ab7b5eec5157aba8639b5f2a"
+  },
+  "email": "alisia@lbadvisor.it",
+  "root": "/gpfs/home4/scur1900/darling_davide",
+  "host": "gcn159.local.snellius.surf.nl",
+  "executable": "/home/scur1900/.conda/envs/verlenv/bin/python3",
+  "cpu_count": 64,
+  "cpu_count_logical": 64,
+  "gpu": "NVIDIA H100",
+  "gpu_count": 2,
+  "disk": {
+    "/": {
+      "total": "405463015424",
+      "used": "4797558784"
+    }
+  },
+  "memory": {
+    "total": "811322179584"
+  },
+  "gpu_nvidia": [
+    {
+      "name": "NVIDIA H100",
+      "memoryTotal": "100485038080",
+      "cudaCores": 16896,
+      "architecture": "Hopper",
+      "uuid": "GPU-7381362b-7dd1-5e82-6c5a-e6a8a2f178d1"
+    },
+    {
+      "name": "NVIDIA H100",
+      "memoryTotal": "100485038080",
+      "cudaCores": 16896,
+      "architecture": "Hopper",
+      "uuid": "GPU-b98babf2-26ce-1b3c-d169-edb602fb21ab"
+    }
+  ],
+  "cudaVersion": "13.0",
+  "slurm": {
+    "cluster_name": "snellius",
+    "conf": "/var/spool/slurm/slurmd/conf-cache/slurm.conf",
+    "cpus_on_node": "16",
+    "cpus_per_task": "8",
+    "eclibr": "0",
+    "ecplug": "1",
+    "erlast": "sbatch",
+    "ersbac": "1",
+    "export_env": "ALL",
+    "get_user_env": "1",
+    "gpus_on_node": "2",
+    "gpus_per_node": "2",
+    "gtids": "0",
+    "job_account": "gpuuva065",
+    "job_cpus_per_node": "16",
+    "job_end_time": "1765165712",
+    "job_gid": "63694",
+    "job_gpus": "2,3",
+    "job_id": "17331752",
+    "job_name": "TRAIN",
+    "job_nodelist": "gcn159",
+    "job_num_nodes": "1",
+    "job_partition": "gpu_h100",
+    "job_qos": "normal",
+    "job_start_time": "1765122512",
+    "job_uid": "64160",
+    "job_user": "scur1900",
+    "jobid": "17331752",
+    "localid": "0",
+    "nnodes": "1",
+    "nodeid": "0",
+    "nodelist": "gcn159",
+    "oom_kill_step": "0",
+    "prio_process": "0",
+    "procid": "0",
+    "script_context": "prolog_task",
+    "step_gres": "gres/cpu:0",
+    "submit_dir": "/gpfs/home4/scur1900/darling_davide",
+    "submit_host": "int5.local.snellius.surf.nl",
+    "task_pid": "3744078",
+    "tasks_per_node": "2",
+    "topology_addr": "root.ibsw42.gcn159",
+    "topology_addr_pattern": "switch.switch.node",
+    "tres_per_task": "cpu=8"
+  },
+  "writerId": "cumr6ink4lpfyklc60cd8auabhsa5ywy"
+}

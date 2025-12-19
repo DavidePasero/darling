@@ -42,13 +42,26 @@ def import_external_libs(external_libs=None):
 
 
 def load_extern_type(file_path: Optional[str], type_name: Optional[str]):
-    """Load a external data type based on the file path and type name"""
+    """Load a external data type based on the file path or module path and type name"""
     import importlib.util
+    import importlib
     import os
 
     if not file_path:
         return None
 
+    # Check if it's a module path (contains dots and no file extension)
+    if '.' in file_path and not file_path.endswith('.py'):
+        # Try to import as a module
+        try:
+            module = importlib.import_module(file_path)
+            if not hasattr(module, type_name):
+                raise AttributeError(f"Custom type '{type_name}' not found in module '{file_path}'.")
+            return getattr(module, type_name)
+        except ModuleNotFoundError:
+            raise ModuleNotFoundError(f"Module '{file_path}' not found.")
+
+    # Otherwise treat as file path
     if not os.path.exists(file_path):
         raise FileNotFoundError(f"Custom type file '{file_path}' not found.")
 

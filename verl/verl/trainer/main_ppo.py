@@ -54,7 +54,10 @@ def main(config):
 def run_ppo(config) -> None:
     if not ray.is_initialized():
         # this is for local ray cluster
+        # Set local_mode=True for debugging (all Ray actors run in same process)
+        debug_mode = os.environ.get("RAY_DEBUG_MODE", "0") == "1"
         ray.init(
+            local_mode=debug_mode,
             runtime_env={"env_vars": {"TOKENIZERS_PARALLELISM": "true", "NCCL_DEBUG": "WARN", "VLLM_LOGGING_LEVEL": "WARN"}},
             num_cpus=config.ray_init.num_cpus,
         )
@@ -152,8 +155,12 @@ class TaskRunner:
 
         from verl.utils.dataset.rl_dataset import collate_fn
 
-        train_dataset = create_rl_dataset(config.data.train_files, config.data, tokenizer, processor)
-        val_dataset = create_rl_dataset(config.data.val_files, config.data, tokenizer, processor)
+        unified_dataset = getattr(reward_fn, 'doc_dataset', None)
+        if unified_dataset:
+            print(f"Reusing UnifiedDataset from RetrievalRewardManager")
+
+        train_dataset = create_rl_dataset(config.data.train_files, config.data, tokenizer, processor, unified_dataset)
+        val_dataset = create_rl_dataset(config.data.val_files, config.data, tokenizer, processor, unified_dataset)
         train_sampler = create_rl_sampler(config.data, train_dataset)
         trainer = RayPPOTrainer(
             config=config,
@@ -175,39 +182,37 @@ class TaskRunner:
         trainer.fit()
 
 
-def create_rl_dataset(data_paths, data_config, tokenizer, processor):
-    """Create a dataset.
-
-    Arguments:
-        data_config: The data config.
-        tokenizer (Tokenizer): The tokenizer.
-        processor (Processor): The processor.
-
-    Returns:
-        dataset (Dataset): The dataset.
-    """
+def create_rl_dataset(data_paths, data_config, tokenizer, processor, unified_dataset=None):
     from torch.utils.data import Dataset
-
     from verl.utils.dataset.rl_dataset import RLHFDataset
+    from verl.utils.import_utils import load_extern_type
+    import inspect
 
     if "custom_cls" in data_config and data_config.custom_cls.get("path", None) is not None:
-        from verl.utils.import_utils import load_extern_type
-
         dataset_cls = load_extern_type(data_config.custom_cls.path, data_config.custom_cls.name)
         if not issubclass(dataset_cls, Dataset):
-            raise TypeError(f"The custom dataset class '{data_config.custom_cls.name}' from '{data_config.custom_cls.path}' must inherit from torch.utils.data.Dataset")
+            raise TypeError(f"Custom dataset class must inherit from torch.utils.data.Dataset")
     else:
         dataset_cls = RLHFDataset
+    
     print(f"Using dataset class: {dataset_cls.__name__}")
 
-    dataset = dataset_cls(
-        data_files=data_paths,
-        tokenizer=tokenizer,
-        processor=processor,
-        config=data_config,
-    )
+    dataset_kwargs = {
+        "data_files": data_paths,
+        "tokenizer": tokenizer,
+        "processor": processor,
+        "config": data_config,
+    }
+    
+    sig = inspect.signature(dataset_cls.__init__)
+    
+    if hasattr(data_config, "prompt_extender") and "prompt_extender" in sig.parameters:
+        dataset_kwargs["prompt_extender"] = data_config.prompt_extender
 
-    return dataset
+    if unified_dataset is not None and "unified_dataset" in sig.parameters:
+        dataset_kwargs["unified_dataset"] = unified_dataset
+
+    return dataset_cls(**dataset_kwargs)
 
 
 def create_rl_sampler(data_config, dataset):

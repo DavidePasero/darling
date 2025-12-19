@@ -234,11 +234,15 @@ class ActorRolloutRefWorker(Worker):
             else:
                 actor_module_class = AutoModelForCausalLM
 
+            # Use SDPA (PyTorch native attention) if flash_attn is disabled
+            use_flash_attn = self.config.model.get("use_flash_attn", True)
+            attn_impl = "flash_attention_2" if use_flash_attn else "sdpa"
+
             actor_module = actor_module_class.from_pretrained(
                 pretrained_model_name_or_path=local_path,
                 torch_dtype=torch_dtype,
                 config=actor_model_config,
-                attn_implementation="flash_attention_2",
+                attn_implementation=attn_impl,
                 trust_remote_code=trust_remote_code,
             )
 

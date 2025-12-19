@@ -1,0 +1,10 @@
+wandb: Detected [openai] in use.
+wandb: Use W&B Weave for improved LLM call tracing. Install Weave with `pip install weave` then add `import weave` to the top of your script.
+wandb: For more information, check out the docs at: https://weave-docs.wandb.ai/
+Checkpoint tracker file does not exist: %s /home/scur1900/scratch_shared/checkpoints/baseline_new_lr/latest_checkpointed_iteration.txt
+Training from scratch
+Training Progress: 100%|█████████▉| 517/518 [5:45:40<00:40, 40.12s/it]  
+local_global_step_folder: /home/scur1900/scratch_shared/checkpoints/baseline_new_lr/global_step_250
+local_global_step_folder: /home/scur1900/scratch_shared/checkpoints/baseline_new_lr/global_step_500
+local_global_step_folder: /home/scur1900/scratch_shared/checkpoints/baseline_new_lr/global_step_518
+'Final validation metrics: None'

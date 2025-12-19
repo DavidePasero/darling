@@ -1,6 +1,11 @@
 change_header.py
 dpo/
-*.sh
-logs/*
+TODO.md
+WORKFLOW.md
+*.index
+
+*datasets/
+evals/*
+.vscode/*
+*.whl
 outputs/*
-wandb/*
