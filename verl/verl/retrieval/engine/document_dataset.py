@@ -175,13 +175,15 @@ class UnifiedDataset:
         self,
         query_uids: List[str],
         retrieved_doc_ids_batch: List[List[str]],
-        method: tuple = ("ndcg"),
+        method: str | tuple = ("ndcg"),
         k: int = 10,
         reranker_url: str = "http://localhost:8000/v1/score",
     ) -> List[float]:
         """
         Compute rewards for a batch of queries using batched operations.
         """
+        if isinstance(method, str):
+            method = (method, )
         result = []
         for fn in method:
             if fn == "ndcg":

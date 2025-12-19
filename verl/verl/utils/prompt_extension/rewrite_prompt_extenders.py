@@ -2,7 +2,7 @@ from verl.utils.prompt_extension.base_prompt_extension import BasePromptExtender
 
 
 class RewritePromptExtender(BasePromptExtender):
-    _REWRITE_SYSTEM_PROMPT = "You are a query rewriting assistant. Your task is to rewrite user queries to make them more effective for document retrieval."
+    _REWRITE_SYSTEM_PROMPT = "You are a query rewriting assistant. Your task is to rewrite user queries to make them more effective for document retrieval. DO NOT OUTPUT ANY REASONING, ONLY ONE REWRITTEN QUERY"
     _REWRITE_USER_PROMPT = "Rewrite the following query:"
     _NAME = "rewrite"
     
