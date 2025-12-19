@@ -49,6 +49,12 @@ def main():
         default="datasets/msmarco/faiss_index",
         help="Output directory (defaults to same as beir-dataset)"
     )
+    parser.add_argument(
+        "--max-docs",
+        type=int,
+        default=None,
+        help="Maximum number of documents to include in the index (prioritizing relevant ones)"
+    )
 
     args = parser.parse_args()
 
@@ -66,7 +72,8 @@ def main():
         faiss_nlist=args.nlist,
         faiss_m=args.m,
         batch_size=args.batch_size,
-        device=args.device
+        device=args.device,
+        max_docs=args.max_docs
     )
 
 

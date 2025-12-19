@@ -1,6 +1,7 @@
 import os
 import asyncio
 import functools
+import time
 from typing import Dict, List, Optional, Tuple
 
 import httpx
@@ -9,11 +10,13 @@ from transformers import AutoTokenizer
 import math
 
 # Debug logging control
-DEBUG_LOG = os.environ.get("DEBUG_LOG", "0") == "1"
+# DIV_DEBUG_LOG is the primary flag for diversity-specific debugging
+# Falls back to DEBUG_LOG for backward compatibility
+DIV_DEBUG_LOG = os.environ.get("DIV_DEBUG_LOG", os.environ.get("DEBUG_LOG", "0")) == "1"
 
 def debug_print(*args, **kwargs):
-    """Print debug messages only if DEBUG_LOG is enabled."""
-    if DEBUG_LOG:
+    """Print debug messages only if DIV_DEBUG_LOG or DEBUG_LOG is enabled."""
+    if DIV_DEBUG_LOG:
         print("[PARTITION_REWARD_DEBUG]", *args, **kwargs)
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -47,6 +50,7 @@ def get_hostname():
         return "localhost"
 
 HOSTNAME = get_hostname()
+print(f"[PARTITION_REWARD_INIT] Using HOSTNAME for vLLM connection: {HOSTNAME}")
 debug_print(f"Using HOSTNAME for vLLM connection: {HOSTNAME}")
 
 # Use single server for retrieval experiments (can be scaled up if more GPUs available)
@@ -57,6 +61,7 @@ SERVER_CFGS  = [
     for i in range(NUM_SERVERS)
 ]
 
+print(f"[PARTITION_REWARD_INIT] Server configurations: {SERVER_CFGS}")
 debug_print(f"Server configurations: {SERVER_CFGS}")
 
 THRESHOLD = 0.5        # decision boundary: "similar" if prob > 0.45
@@ -77,10 +82,17 @@ def get_tokenizer():
         tokenizer.pad_token_id = tokenizer.eos_token_id
     return tokenizer  
                                
-@functools.lru_cache(maxsize=None)
 def get_client(base_url: str) -> httpx.AsyncClient:
-    """Get a new HTTP client for the given URL."""
-    return httpx.AsyncClient(base_url=base_url, timeout=600)
+    """Get a new HTTP client for the given URL.
+
+    Note: Removed caching because Ray workers in different processes
+    can't share the same client instance safely.
+    """
+    return httpx.AsyncClient(
+        base_url=base_url,
+        timeout=httpx.Timeout(600.0, connect=60.0),
+        limits=httpx.Limits(max_keepalive_connections=5, max_connections=10)
+    )
 
 # ──────────────────────────────────────────────────────────────────────────────
 # VERY CHEAP LOCAL CHECK FOR TINY ANSWERS
@@ -130,49 +142,50 @@ async def remote_similarity_prob(s1: str, s2: str, cfg: Dict) -> float:
     retry_delay = 1.0  # Initial delay in seconds
 
     for attempt in range(max_retries):
+        # Create a fresh client for each attempt
+        client = get_client(cfg["url"])
+
         try:
-            # Get a client - may be cached or new
-            client = get_client(cfg["url"])
+            debug_print(f"Attempt {attempt+1}/{max_retries}: POST {cfg['url']}/classify")
+            resp = await client.post("/classify", json=payload)
+            debug_print(f"Response status: {resp.status_code}")
+            debug_print(f"Response headers: {dict(resp.headers)}")
+            resp.raise_for_status()
 
-            try:
-                debug_print(f"Attempt {attempt+1}/{max_retries}: POST {cfg['url']}/classify")
-                resp = await client.post("/classify", json=payload)
-                debug_print(f"Response status: {resp.status_code}")
-                debug_print(f"Response headers: {dict(resp.headers)}")
-                resp.raise_for_status()
+            response_json = resp.json()
+            debug_print(f"Response JSON: {response_json}")
+            prob = response_json["data"][0]["probs"]
+            debug_print(f"Extracted probability: {prob[-1]}")
 
-                response_json = resp.json()
-                debug_print(f"Response JSON: {response_json}")
-                prob = response_json["data"][0]["probs"]
-                debug_print(f"Extracted probability: {prob[-1]}")
-                return prob[-1]
-                
-            except (httpx.HTTPError, httpx.TimeoutException, httpx.ConnectError,
-                    httpx.ReadError, RuntimeError) as e:
-                debug_print(f"HTTP error occurred: {type(e).__name__}: {str(e)}")
-                if hasattr(e, 'response') and e.response is not None:
-                    debug_print(f"Error response status: {e.response.status_code}")
-                    debug_print(f"Error response body: {e.response.text}")
+            # Close client before returning
+            await client.aclose()
+            return prob[-1]
 
-                # If we get a connection error or the "TCPTransport closed" runtime error
-                if "TCPTransport closed" in str(e) or isinstance(e, (httpx.ConnectError, httpx.ReadError)):
-                    debug_print("Connection error detected, clearing client cache")
-                    # Clear the cache entry for this URL and create a new client
-                    get_client.cache_clear()
-                    if attempt < max_retries - 1:  # Not the last attempt
-                        continue  # Try again with a new client
+        except (httpx.HTTPError, httpx.TimeoutException, httpx.ConnectError,
+                httpx.ReadError, RuntimeError) as e:
+            debug_print(f"HTTP error occurred: {type(e).__name__}: {str(e)}")
+            if hasattr(e, 'response') and e.response is not None:
+                debug_print(f"Error response status: {e.response.status_code}")
+                debug_print(f"Error response body: {e.response.text}")
 
-                # For other errors, follow normal retry logic
-                if attempt == max_retries - 1:
-                    raise
+            # Always close the client on error
+            await client.aclose()
 
-                wait_time = retry_delay * (2 ** attempt)
-                print(f"Request failed (attempt {attempt+1}/{max_retries}): {str(e)}. Retrying in {wait_time:.2f}s...")
-                debug_print(f"Waiting {wait_time:.2f}s before retry...")
-                await asyncio.sleep(wait_time)
+            # For other errors, follow normal retry logic
+            if attempt == max_retries - 1:
+                raise
+
+            wait_time = retry_delay * (2 ** attempt)
+            print(f"Request failed (attempt {attempt+1}/{max_retries}): {str(e)}. Retrying in {wait_time:.2f}s...")
+            debug_print(f"Waiting {wait_time:.2f}s before retry...")
+            await asyncio.sleep(wait_time)
 
         except Exception as e:
             debug_print(f"Unexpected error: {type(e).__name__}: {str(e)}")
+
+            # Always close the client on error
+            await client.aclose()
+
             if attempt == max_retries - 1:
                 raise
             wait_time = retry_delay * (2 ** attempt)
@@ -280,7 +293,19 @@ def partition(**kwargs) -> List[float]:
         raise ValueError("uid is required for partition reward function")
 
     # async partitioning
-    uid_parts = asyncio.run(partition_async(solution_str, uid, prompts))
+    # Create a new event loop for Ray compatibility
+    debug_print(f"Starting classification for {len(solution_str)} responses")
+    start_time = time.time()
+
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    try:
+        uid_parts = loop.run_until_complete(partition_async(solution_str, uid, prompts))
+    finally:
+        loop.close()
+
+    elapsed_time = time.time() - start_time
+    print(f"[PARTITION_REWARD] Classification completed in {elapsed_time:.2f}s for {len(uid_parts)} UIDs ({len(solution_str)} responses)")
 
     # map uid → list of indices (for totals)
     uid_to_indices: Dict[str, List[int]] = {}
@@ -415,7 +440,20 @@ def partition_correct(**kwargs) -> List[float]:
         raise ValueError("correctness is required for partition_correct reward function")
 
     # async partitioning considering only correct responses
-    uid_parts = asyncio.run(partition_correct_async(solution_str, uid, prompts, correctness))
+    # Create a new event loop for Ray compatibility
+    debug_print(f"Starting classification (correct-only) for {len(solution_str)} responses")
+    start_time = time.time()
+
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    try:
+        uid_parts = loop.run_until_complete(partition_correct_async(solution_str, uid, prompts, correctness))
+    finally:
+        loop.close()
+
+    elapsed_time = time.time() - start_time
+    num_correct = sum(correctness)
+    print(f"[PARTITION_REWARD_CORRECT] Classification completed in {elapsed_time:.2f}s for {len(uid_parts)} UIDs ({num_correct}/{len(solution_str)} correct responses)")
 
     # map uid → list of indices (for totals)
     uid_to_indices: Dict[str, List[int]] = {}

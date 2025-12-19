@@ -69,8 +69,12 @@ module load Anaconda3/2023.07-2
 eval "$(conda shell.bash hook)"
 conda activate verlenv
 
+# Fix MKL threading layer incompatibility with vLLM
+export MKL_THREADING_LAYER=GNU
+export MKL_SERVICE_FORCE_INTEL=1
+
 export HYDRA_FULL_ERROR=1
-export DEBUG_LOG=1
+export DEBUG_LOG=0
 
 # Enable strict error checking AFTER conda activation
 # (conda activation scripts may have unbound variables like JAVA_HOME)

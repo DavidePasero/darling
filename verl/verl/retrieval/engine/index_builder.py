@@ -30,7 +30,8 @@ class IndexBuilder:
         faiss_m: int = 32,
         bm25_threads: int = 8,
         batch_size: int = 128,
-        device: str = "cuda"
+        device: str = "cuda",
+        max_docs: Optional[int] = None
     ):
         if self.verbose:
             print("=" * 80)
@@ -41,9 +42,77 @@ class IndexBuilder:
 
         adapter = BeirAdapter(data_path=beir_dataset_path, split="train")
         dataset = adapter.to_unified()
+        
 
-        corpus_ids = list(dataset.corpus.keys())
-        corpus_texts = dataset.corpus
+        if max_docs is not None:
+            if self.verbose:
+                print(f"Limiting to {max_docs} documents (maximizing relevance coverage)...")
+            
+            import csv
+
+            best_docs = []
+            qrels_dir = Path(beir_dataset_path) / "qrels"
+            
+            if qrels_dir.exists():
+                for qrel_file in qrels_dir.glob("*.tsv"):
+                    if self.verbose:
+                        print(f"Loading relevance info from {qrel_file}")
+                    
+                    with open(qrel_file, 'r', encoding='utf-8') as f:
+                        reader = csv.reader(f, delimiter='\t', quoting=csv.QUOTE_NONE)
+                        header = next(reader, None)
+                        
+                        qid_idx, doc_idx, score_idx = 0, 1, 2
+                        if header:
+                            try:
+                                qid_idx = header.index("query-id")
+                                doc_idx = header.index("corpus-id")
+                                score_idx = header.index("score")
+                            except ValueError:
+                                pass
+                        
+                        for row in reader:
+                            if len(row) < 3:
+                                continue
+                            doc_id = row[doc_idx]
+                            try:
+                                score = float(row[score_idx])
+                            except ValueError:
+                                score = 0
+                                
+                            if score > 0:
+                                best_docs.append(doc_id)
+            
+            if self.verbose:
+                print(f"Selected {len(best_docs)} documents.")
+                
+            corpus_ids = list(set(best_docs))
+
+            all_ids = list(range(len(dataset.corpus)))
+            while True:
+                start = 0
+                if len(corpus_ids) >= max_docs:
+                    break
+                corpus_ids += all_ids[start:max_docs - len(corpus_ids)]
+                corpus_ids = list(set(corpus_ids))
+                start += max_docs - len(corpus_ids)
+
+            # if len(corpus_ids) < max_docs:
+            #     for k in range(len(dataset.corpus.keys())):
+            #         if len(corpus_ids)%100000 == 0:
+            #             print(f"Selected {len(corpus_ids)} documents.")
+            #         if len(corpus_ids) >= max_docs:
+            #             break
+            #         if k not in corpus_ids:
+            #             corpus_ids.append(k)
+
+            corpus_texts = {k: dataset.corpus[k] for k in corpus_ids}
+        
+        else:
+            if self.verbose:
+                print("No max_docs specified, using all documents")
+            corpus_ids = list(dataset.corpus.keys())
+            corpus_texts = dataset.corpus
 
         if self.verbose:
             print(f"Loaded {len(corpus_texts)} documents")

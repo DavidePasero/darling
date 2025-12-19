@@ -26,6 +26,12 @@ def main():
         default=8,
         help="Number of threads for indexing"
     )
+    parser.add_argument(
+        "--max-docs",
+        type=int,
+        default=None,
+        help="Maximum number of documents to include in the index (prioritizing relevant ones)"
+    )
 
     args = parser.parse_args()
 
@@ -42,7 +48,8 @@ def main():
 
     builder.build_from_beir(
         beir_dataset_path=args.beir_dataset,
-        bm25_threads=args.threads
+        bm25_threads=args.threads,
+        max_docs=args.max_docs
     )
 
 

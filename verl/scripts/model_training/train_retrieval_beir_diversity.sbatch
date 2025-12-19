@@ -2,11 +2,11 @@
 #SBATCH --job-name=DIV_BEIR_RETR
 #SBATCH --partition=gpu_h100
 #SBATCH --nodes=1
-#SBATCH --gpus-per-node=2
+#SBATCH --gpus-per-node=3
 #SBATCH --cpus-per-task=16
 #SBATCH --time=24:00:00
-#SBATCH --output=logs_div/beir_retrieval_div_%j.out
-#SBATCH --error=logs_div/beir_retrieval_div_%j.err
+#SBATCH --output=logs_divv/beir_retrieval_div_%j.out
+#SBATCH --error=logs_divv/beir_retrieval_div_%j.err
 
 ##############################
 # CONFIGURATION
@@ -14,7 +14,7 @@
 CHECKPOINT_DIR=/home/scur1900/scratch-shared/checkpoints
 
 # BEIR Dataset Configuration
-BEIR_DATASET="fiqa"
+BEIR_DATASET="msmarco"
 BEIR_DIR="/home/scur1900/scratch_shared/${BEIR_DATASET}"
 QUERIES_FILE="${BEIR_DIR}/queries.jsonl"
 TRAIN_QRELS="${BEIR_DIR}/qrels/train.tsv"
@@ -22,10 +22,10 @@ DEV_QRELS="${BEIR_DIR}/qrels/dev.tsv"
 QRELS_FILE="qrels/train.tsv"
 
 # Retriever Configuration
-RETRIEVER_TYPE="bm25"  # Options: "faiss" or "bm25"
-FAISS_INDEX="${BEIR_DIR}/faiss/index"
-FAISS_ID_MAPPING="${BEIR_DIR}/faiss/docid"
-EMBEDDING_MODEL="BAAI/bge-base-en-v1.5"
+RETRIEVER_TYPE="faiss"  # Options: "faiss" or "bm25"
+FAISS_INDEX="${BEIR_DIR}/faiss/faiss_index.faiss"
+FAISS_ID_MAPPING="${BEIR_DIR}/faiss/id_mapping.pkl"
+EMBEDDING_MODEL="Qwen/Qwen3-Embedding-0.6B" #"BAAI/bge-base-en-v1.5"
 BM25_INDEX="${BEIR_DIR}/bm25_index/index"
 BM25_ID_MAPPING="${BEIR_DIR}/bm25_index/id_mapping.pkl"
 BM25_K1=0.9
@@ -43,19 +43,25 @@ EPOCHS=500
 
 # Reward Configuration
 QUALITY_METHOD="ndcg"
-K=10
+K=20
 
 # Diversity Reward Configuration (DARLING-style)
 DIVERSITY_ENABLED=true
-DIVERSITY_METHOD="partition_vllm"  # Options: "ngram", "partition_vllm", "unlikelihood"
+DIVERSITY_METHOD="ngram"  # Options: "ngram", "partition_vllm", "unlikelihood"
 NGRAM_N=4  # For ngram diversity
 # For partition_vllm diversity (DARLING-style with vLLM classifier):
 CLASSIFIER_MODEL="/home/scur1900/models/dogtooth"  # Similarity classifier model
 PARTITION_REWARD_PATH="verl/verl/utils/reward_score/partition_reward_vllm_serve.py"
 
+# Reward Combination Configuration
+MULTIPLICATIVE=false  # Use multiplicative combination (quality × diversity) instead of additive
+LAMBDA_RM=1.0        # Scale for quality reward
+LAMBDA_RULE=1.0      # Scale for diversity reward
+
 # FAISS Performance Configuration
 NPROBE=8
-ENCODING_BATCH_SIZE=512
+ENCODING_BATCH_SIZE=256
+SEARCH_BATCH_SIZE=256
 
 # Logging Configuration
 LOG_REWRITE_FREQ=100
@@ -63,7 +69,7 @@ LOG_NUM_QUERIES=10
 LOG_NUM_REWRITES=10
 
 # Resource Configuration
-GPU_MEMORY_UTIL=0.8
+GPU_MEMORY_UTIL=0.6
 OFFLOAD_PARAMS=true
 OFFLOAD_OPTIMIZER=false
 
@@ -77,8 +83,13 @@ module load Anaconda3/2023.07-2
 eval "$(conda shell.bash hook)"
 conda activate verlenv
 
+# Fix MKL threading layer incompatibility with vLLM
+export MKL_THREADING_LAYER=GNU
+export MKL_SERVICE_FORCE_INTEL=1
+
 export HYDRA_FULL_ERROR=1
-export DEBUG_LOG=1
+export DEBUG_LOG=0
+export DIV_DEBUG_LOG=0
 
 # Enable strict error checking AFTER conda activation
 set -euo pipefail
@@ -107,10 +118,13 @@ if [ "${DIVERSITY_ENABLED}" = "true" ] && [ "${DIVERSITY_METHOD}" = "partition_v
     echo "Setting up vLLM Classifier Server (Diversity)"
     echo "========================================="
 
-    # Don't set VLLM_SERVER_HOSTNAME to localhost - let the code auto-detect the actual hostname
-    # This is important for Ray workers to be able to connect
+    # Use localhost since vLLM server runs in Apptainer container on same node
+    # Ray workers on the same node can connect via localhost/127.0.0.1
+    export VLLM_SERVER_HOSTNAME="127.0.0.1"
     export VLLM_CLASSIFIER_PORT=8000
     export PYTHONUNBUFFERED=1
+
+    echo "VLLM_SERVER_HOSTNAME set to: $VLLM_SERVER_HOSTNAME"
 
     CONTAINER=/projects/2/managed_datasets/containers/vllm/vllm_25.09.sif
 
@@ -167,27 +181,26 @@ if [ "${DIVERSITY_ENABLED}" = "true" ] && [ "${DIVERSITY_METHOD}" = "partition_v
 fi
 
 ##############################
-# VLLM EMBEDDING SERVER SETUP
-# (Only needed for FAISS retriever)
+# FAISS RETRIEVAL SERVER SETUP
+# (For FAISS retriever - runs on GPU 2, separate from training GPUs 0-1)
 ##############################
+FAISS_SERVER_PID=""
 VLLM_EMBEDDING_PID=""
 if [ "${RETRIEVER_TYPE}" = "faiss" ]; then
     echo "========================================="
-    echo "Setting up vLLM Embedding Server (FAISS)"
+    echo "Setting up FAISS Retrieval Server"
     echo "========================================="
 
-    # Use different GPU if classifier is already running
-    if [ -n "${VLLM_CLASSIFIER_PID}" ]; then
-        EMBEDDING_GPU=1
-    else
-        export VLLM_SERVER_HOSTNAME="localhost"
-        EMBEDDING_GPU=0
-    fi
+    # FAISS services run on GPU 2 (separate from training on GPUs 0-1)
+    FAISS_GPU=2
+    EMBEDDING_GPU=2
 
     VLLM_EMBEDDING_PORT=8001
+    FAISS_SERVER_PORT=8002
     export PYTHONUNBUFFERED=1
     CONTAINER=/projects/2/managed_datasets/containers/vllm/vllm_25.09.sif
 
+    # Start vLLM embedding server on GPU 0
     echo "Starting vLLM embedding server on GPU ${EMBEDDING_GPU}..."
     echo "Embedding Model: ${EMBEDDING_MODEL}"
 
@@ -199,7 +212,8 @@ if [ "${RETRIEVER_TYPE}" = "faiss" ]; then
         --max-model-len 512 \
         --port ${VLLM_EMBEDDING_PORT} \
         --host 0.0.0.0 \
-        --task embedding
+        --no-enable-chunked-prefill \
+        --task embedding 
     " > vllm_embedding.log 2>&1 &
 
     VLLM_EMBEDDING_PID=$!
@@ -223,8 +237,47 @@ if [ "${RETRIEVER_TYPE}" = "faiss" ]; then
         exit 1
     fi
 
+    # Start FAISS retrieval server on GPU 0 (same GPU as classifier and embedding)
+    echo "Starting FAISS retrieval server on GPU ${FAISS_GPU}..."
+    echo "FAISS Index: ${FAISS_INDEX}"
+
+    CUDA_VISIBLE_DEVICES=${FAISS_GPU} \
+    FAISS_INDEX_PATH="${FAISS_INDEX}" \
+    EMBEDDING_MODEL="${EMBEDDING_MODEL}" \
+    ID_MAPPING_PATH="${FAISS_ID_MAPPING}" \
+    DEVICE="cuda" \
+    INDEX_DEVICE="cuda" \
+    EMBEDDING_MODE="vllm" \
+    VLLM_SERVER_URL="http://localhost:${VLLM_EMBEDDING_PORT}" \
+    MAX_SEQ_LEN=512 \
+    PORT=${FAISS_SERVER_PORT} \
+    HOST="0.0.0.0" \
+    python3 -m verl.retrieval.engine.faiss_server > faiss_server.log 2>&1 &
+
+    FAISS_SERVER_PID=$!
+    echo "FAISS Server PID = ${FAISS_SERVER_PID}"
+
+    echo "Waiting for FAISS server at http://localhost:${FAISS_SERVER_PORT}/health"
+    for i in {1..60}; do
+        STATUS=$(curl -s -o /dev/null -w "%{http_code}" "http://localhost:${FAISS_SERVER_PORT}/health" || true)
+        if [[ "$STATUS" == "200" ]]; then
+            echo "FAISS Retrieval Server READY!"
+            break
+        fi
+        sleep 2
+    done
+
+    if [[ "$STATUS" != "200" ]]; then
+        echo "ERROR: FAISS retrieval server failed to start"
+        tail -n 50 faiss_server.log
+        kill ${FAISS_SERVER_PID} || true
+        kill ${VLLM_EMBEDDING_PID} || true
+        [ -n "${VLLM_CLASSIFIER_PID}" ] && kill ${VLLM_CLASSIFIER_PID} || true
+        exit 1
+    fi
+
     ID_MAPPING="${FAISS_ID_MAPPING}"
-    echo "vLLM Embedding Server is ready!"
+    echo "FAISS Retrieval Server is ready!"
     echo "========================================="
 else
     echo "========================================="
@@ -232,6 +285,21 @@ else
     echo "========================================="
     ID_MAPPING="${BM25_ID_MAPPING}"
 fi
+
+##############################
+# GPU ALLOCATION FOR TRAINING
+##############################
+# Reserve GPUs 0-1 for Ray training workers
+# GPU 2 is used for FAISS/embedding services (if enabled)
+export CUDA_VISIBLE_DEVICES=0,1
+
+echo "========================================="
+echo "GPU Allocation:"
+echo "  - Training (Ray): GPUs 0-1"
+if [ "${RETRIEVER_TYPE}" = "faiss" ]; then
+    echo "  - FAISS Services: GPU 2"
+fi
+echo "========================================="
 
 ##############################
 # GPU USAGE MONITOR
@@ -277,11 +345,11 @@ if [ "${RETRIEVER_TYPE}" = "faiss" ]; then
         "+reward_model.faiss_index_path=${FAISS_INDEX}"
         "+reward_model.id_mapping_path=${FAISS_ID_MAPPING}"
         "+reward_model.embedding_model=${EMBEDDING_MODEL}"
-        "+reward_model.embedding_mode=vllm"
-        "+reward_model.vllm_server_url=http://localhost:8001"
-        "+reward_model.faiss_device=cuda"
+        "+reward_model.use_faiss_server=True"
+        "+reward_model.faiss_server_url=http://localhost:8002"
         "+reward_model.nprobe=${NPROBE}"
         "+reward_model.encoding_batch_size=${ENCODING_BATCH_SIZE}"
+        "+reward_model.search_batch_size=${SEARCH_BATCH_SIZE}"
     )
 else
     RETRIEVER_ARGS=(
@@ -294,8 +362,6 @@ else
 fi
 
 # Build diversity-specific config arguments
-# NOTE: We always use reward_manager=retrieval for the main reward (to load UnifiedDataset)
-# Diversity is configured via diversity_reward_manager and custom_diversity_function
 REWARD_MANAGER="retrieval"
 DIVERSITY_ARGS=()
 
@@ -309,7 +375,7 @@ if [ "${DIVERSITY_ENABLED}" = "true" ]; then
     case "${DIVERSITY_METHOD}" in
         "ngram")
             DIVERSITY_ARGS+=(
-                "+reward_model.custom_diversity_function.path=verl.utils.reward_score.diversity_rewards"
+                "+reward_model.custom_diversity_function.path=verl/verl/utils/reward_score/diversity_rewards.py"
                 "+reward_model.custom_diversity_function.name=ngram"
                 "+reward_model.reward_kwargs.n=${NGRAM_N}"
             )
@@ -323,7 +389,7 @@ if [ "${DIVERSITY_ENABLED}" = "true" ]; then
             ;;
         "unlikelihood")
             DIVERSITY_ARGS+=(
-                "+reward_model.custom_diversity_function.path=verl.utils.reward_score.diversity_rewards"
+                "+reward_model.custom_diversity_function.path=verl/verl/utils/reward_score/diversity_rewards.py"
                 "+reward_model.custom_diversity_function.name=unlikelihood"
             )
             ;;
@@ -386,6 +452,9 @@ python3 -m verl.trainer.main_ppo \
     +reward_model.qrels_file=${QRELS_FILE} \
     +reward_model.quality_method=${QUALITY_METHOD} \
     +reward_model.k=${K} \
+    +reward_model.multiplicative=${MULTIPLICATIVE} \
+    +reward_model.lambda_rm_rescale=${LAMBDA_RM} \
+    +reward_model.lambda_rule_rescale=${LAMBDA_RULE} \
     "${RETRIEVER_ARGS[@]}" \
     "${DIVERSITY_ARGS[@]}" \
     trainer.critic_warmup=0 \
@@ -422,10 +491,18 @@ if [ -n "${VLLM_CLASSIFIER_PID}" ]; then
     echo "vLLM classifier server stopped"
 fi
 
-if [ "${RETRIEVER_TYPE}" = "faiss" ] && [ -n "${VLLM_EMBEDDING_PID}" ]; then
-    echo "Stopping vLLM embedding server..."
-    kill ${VLLM_EMBEDDING_PID} || true
-    echo "vLLM embedding server stopped"
+if [ "${RETRIEVER_TYPE}" = "faiss" ]; then
+    if [ -n "${FAISS_SERVER_PID}" ]; then
+        echo "Stopping FAISS retrieval server..."
+        kill ${FAISS_SERVER_PID} || true
+        echo "FAISS retrieval server stopped"
+    fi
+
+    if [ -n "${VLLM_EMBEDDING_PID}" ]; then
+        echo "Stopping vLLM embedding server..."
+        kill ${VLLM_EMBEDDING_PID} || true
+        echo "vLLM embedding server stopped"
+    fi
 fi
 
 echo "========================================="

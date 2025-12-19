@@ -2,6 +2,10 @@
 # Train on a BEIR dataset with retrieval quality + diversity rewards.
 # This mirrors the original training script but adds the diversity reward manager.
 
+# Fix MKL threading layer incompatibility with vLLM
+export MKL_THREADING_LAYER=GNU
+export MKL_SERVICE_FORCE_INTEL=1
+
 # ----------------------------------------------------------------------
 # 1.  USER‑CONFIGURABLE PARAMETERS
 # ----------------------------------------------------------------------
