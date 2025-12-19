@@ -23,21 +23,24 @@ class RetrievalRewardManager:
         compute_score,
         reward_fn_key="data_source",
         retriever_type="faiss",
-        # FAISS-specific parameters
         faiss_index_path=None,
         embedding_model="Qwen/Qwen3-Embedding-0.6B",
-        # BM25-specific parameters
+        embedding_mode="local",
+        vllm_server_url=None,
         bm25_index_path=None,
         bm25_k1=0.9,
         bm25_b=0.4,
-        # Common parameters
+        bm25_num_threads=None,
         id_mapping_path=None,
         beir_dataset_path=None,
         qrels_file="qrels/train.tsv",
         quality_method="ndcg",
         k=10,
         device="cuda",
-        **kwargs,
+        faiss_device="cpu",
+        nprobe=16,
+        encoding_batch_size=256,
+        **kwargs
     ):
         """
         Initialize retrieval reward manager.
@@ -58,7 +61,10 @@ class RetrievalRewardManager:
             qrels_file: Relative path to qrels file (default: "qrels/train.tsv")
             quality_method: Metric to use ('ndcg', 'recall', 'precision', 'hit', 'reranker')
             k: Top-k for retrieval
-            device: Device for models (FAISS only)
+            device: Device for embedding model (default: cuda)
+            faiss_device: Device for FAISS index (default: cpu)
+            nprobe: Number of clusters to probe for FAISS search (default: 16)
+            encoding_batch_size: Batch size for embedding encoding (default: 256)
         """
         self.tokenizer = tokenizer
         self.num_examine = num_examine
@@ -70,7 +76,10 @@ class RetrievalRewardManager:
 
         self.k = k
         self.device = device
+        self.faiss_device = faiss_device
         self.retriever_type = retriever_type.lower()
+        self.nprobe = nprobe
+        self.encoding_batch_size = encoding_batch_size
 
         if beir_dataset_path is None:
             raise ValueError("beir_dataset_path must be provided")
@@ -90,7 +99,11 @@ class RetrievalRewardManager:
                 embedding_model=embedding_model,
                 id_mapping_path=id_mapping_path,
                 device=device,
-                verbose=True,
+                index_device=faiss_device,
+                embedding_mode=embedding_mode,
+                vllm_server_url=vllm_server_url,
+                max_seq_len=512,
+                verbose=True
             )
 
         elif self.retriever_type == "bm25":
@@ -98,7 +111,12 @@ class RetrievalRewardManager:
                 raise ValueError("bm25_index_path must be provided for BM25 retriever")
 
             self.retriever = Bm25Retriever(
-                index_path=bm25_index_path, k1=bm25_k1, b=bm25_b, id_mapping_path=id_mapping_path, verbose=True
+                index_path=bm25_index_path,
+                k1=bm25_k1,
+                b=bm25_b,
+                id_mapping_path=id_mapping_path,
+                num_threads=bm25_num_threads,
+                verbose=True
             )
 
         else:
@@ -110,6 +128,11 @@ class RetrievalRewardManager:
         print(f"Loaded {len(self.doc_dataset.qrels)} queries with relevance labels")
         print(f"Quality reward: {quality_method}@{k}")
         print(f"Index size: {self.retriever.get_index_size()} documents")
+        if self.retriever_type == "faiss":
+            print(f"FAISS Performance Settings:")
+            print(f"  - nprobe: {self.nprobe} (lower=faster)")
+            print(f"  - encoding_batch_size: {self.encoding_batch_size}")
+            print(f"  - faiss_device: {self.faiss_device}")
         print("=" * 80)
         print()
 
@@ -133,13 +156,23 @@ class RetrievalRewardManager:
         valid_response_lengths = attention_mask[:, prompt_len:].sum(dim=-1)
 
         responses_str = []
+        # Truncate to max 512 tokens to fit embedding model's context window
+        max_embedding_tokens = 512
         for i in range(len(data)):
             valid_len = valid_response_lengths[i]
             valid_response_ids = response_ids[i][:valid_len]
+            # Truncate to max embedding tokens
+            if len(valid_response_ids) > max_embedding_tokens:
+                valid_response_ids = valid_response_ids[:max_embedding_tokens]
             response_str = self.tokenizer.decode(valid_response_ids, skip_special_tokens=True)
             responses_str.append(response_str)
 
-        scores, indices = self.retriever.search(responses_str, k=self.k, nprobe=64)
+        scores, indices = self.retriever.search(
+            responses_str,
+            k=self.k,
+            nprobe=self.nprobe,
+            batch_size=self.encoding_batch_size
+        )
         retrieved_doc_ids = self.retriever.map_indices_to_ids(indices)
 
         rewards = self.doc_dataset.compute_rewards_batch(

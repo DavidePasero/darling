@@ -38,7 +38,7 @@ from verl.utils.metric import (
 )
 from verl.utils.seqlen_balancing import get_seqlen_balanced_partitions, log_seqlen_unbalance
 from verl.utils.torch_functional import masked_mean
-from verl.utils.tracking import ValidationGenerationsLogger
+from verl.utils.tracking import ValidationGenerationsLogger, RewriteLogger
 from verl.workers.rollout.async_server import AsyncLLMServerManager
 
 WorkerType = Type[Worker]
@@ -435,6 +435,7 @@ class RayPPOTrainer:
         self.use_rm = Role.RewardModel in role_worker_mapping
         self.ray_worker_group_cls = ray_worker_group_cls
         self.validation_generations_logger = ValidationGenerationsLogger()
+        self.rewrite_logger = RewriteLogger()
 
         # define in-reward KL control
         # kl loss control currently not suppoorted
@@ -1117,6 +1118,42 @@ class RayPPOTrainer:
                     batch = batch.repeat(repeat_times=self.config.actor_rollout_ref.rollout.n, interleave=True)
                     batch = batch.union(gen_batch_output)
 
+                    # Log query rewrites periodically
+                    log_rewrite_freq = self.config.trainer.get("log_rewrite_freq", 0)
+                    if log_rewrite_freq > 0 and self.global_steps % log_rewrite_freq == 0:
+                        log_num_queries = self.config.trainer.get("log_num_queries", 5)
+                        log_num_rewrites = self.config.trainer.get("log_num_rewrites", self.config.actor_rollout_ref.rollout.n)
+
+                        # Get original queries
+                        prompts = batch.batch["prompts"][:log_num_queries * log_num_rewrites]
+                        prompt_texts = [self.tokenizer.decode(p, skip_special_tokens=True) for p in prompts]
+
+                        # Get rewrites (responses)
+                        responses = batch.batch["responses"][:log_num_queries * log_num_rewrites]
+                        response_texts = [self.tokenizer.decode(r, skip_special_tokens=True) for r in responses]
+
+                        # Group rewrites by query (every n consecutive responses belong to same query)
+                        queries_to_log = []
+                        rewrites_to_log = []
+                        n_rewrites = self.config.actor_rollout_ref.rollout.n
+
+                        for i in range(log_num_queries):
+                            start_idx = i * n_rewrites
+                            end_idx = start_idx + min(log_num_rewrites, n_rewrites)
+                            if start_idx < len(response_texts):
+                                # Use the first prompt text as the query (they should all be the same for a group)
+                                queries_to_log.append(prompt_texts[start_idx])
+                                # Collect the rewrites for this query
+                                rewrites_to_log.append(response_texts[start_idx:end_idx])
+
+                        if queries_to_log:
+                            self.rewrite_logger.log(
+                                loggers=self.config.trainer.logger,
+                                queries=queries_to_log,
+                                rewrites=rewrites_to_log,
+                                step=self.global_steps
+                            )
+
                     batch.batch["response_mask"] = compute_response_mask(batch)
                     # balance the number of valid tokens on each dp rank.
                     # Note that this breaks the order of data inside the batch.
@@ -1247,22 +1284,43 @@ class RayPPOTrainer:
                                         # Use negative of minimum as bias to make all rewards positive
                                         bias_per_response[uid_mask] = -min_reward
                                     
-                                    # Convert back to tensor and add as bias (expand to match sequence dimension)
                                     bias_tensor = torch.tensor(bias_per_response, device=reward_tensor_rm.device)
                                     bias_tensor = bias_tensor.unsqueeze(-1).expand_as(reward_tensor_rm)
                                     reward_tensor_rm = reward_tensor_rm + bias_tensor
 
-                                # multiplicative combination
                                 reward_tensor_rm = reward_tensor_rm * reward_tensor_rule
-                                reward_tensor = reward_tensor_rm.cpu().tolist()  # convert to list
+                                reward_tensor = reward_tensor_rm.cpu().tolist()
                                 
-                            else: # not normalizing, just rescale        
+                            else:
                                 reward_tensor_rm = reward_tensor_rm * lambda_rm_rescale
                                 reward_tensor_rule = reward_tensor_rule * lambda_rule_rescale
                                 reward_tensor = [a + b for a, b in zip(reward_tensor_rm.cpu().tolist(), reward_tensor_rule.cpu().tolist())]
 
+                            if os.environ.get("DEBUG_LOG", "0") == "1":
+                                print("\n" + "=" * 80)
+                                print("DEBUG: REWARD COMBINATION")
+                                print("=" * 80)
+                                
+                                rm_sum = reward_tensor_rm.sum(-1).cpu().numpy() if isinstance(reward_tensor_rm, torch.Tensor) else np.array([sum(r) for r in reward_tensor_rm])
+                                rule_sum = reward_tensor_rule.sum(-1).cpu().numpy() if isinstance(reward_tensor_rule, torch.Tensor) else np.array([sum(r) for r in reward_tensor_rule])
+                                combined_sum = np.array([sum(r) for r in reward_tensor])
+                                
+                                print(f"Mode: {'Multiplicative' if multiplicative else 'Additive'}")
+                                print(f"Quality scale: {lambda_rm_rescale}")
+                                print(f"Diversity scale: {lambda_rule_rescale}")
+                                print(f"\nSample rewards (first 5):")
+                                for i in range(min(5, len(rm_sum))):
+                                    print(f"  [{i}] Quality: {rm_sum[i]:.4f}, Diversity: {rule_sum[i]:.4f}, Combined: {combined_sum[i]:.4f}")
+                                
+                                print(f"\nBatch statistics:")
+                                print(f"  Quality:   mean={rm_sum.mean():.4f}, std={rm_sum.std():.4f}")
+                                print(f"  Diversity: mean={rule_sum.mean():.4f}, std={rule_sum.std():.4f}")
+                                print(f"  Combined:  mean={combined_sum.mean():.4f}, std={combined_sum.std():.4f}")
+                                print("=" * 80 + "\n")
+
                         else: 
                             reward_tensor = reward_tensor_rm
+
 
                     
                     if self.use_reference_policy:
@@ -1350,7 +1408,9 @@ class RayPPOTrainer:
                     # validate
                     
                     if self.val_reward_fn is not None and self.config.trainer.test_freq > 0 and (is_last_step or self.global_steps % self.config.trainer.test_freq == 0):
+                        print("Start timer...")
                         with _timer("testing", timing_raw):
+                            print("Validating...")
                             val_metrics: dict = self._validate()
                             if is_last_step:
                                 last_val_metrics = val_metrics

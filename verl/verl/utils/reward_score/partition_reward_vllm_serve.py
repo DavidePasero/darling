@@ -8,17 +8,58 @@ import torch
 from transformers import AutoTokenizer
 import math
 
+# Debug logging control
+DEBUG_LOG = os.environ.get("DEBUG_LOG", "0") == "1"
+
+def debug_print(*args, **kwargs):
+    """Print debug messages only if DEBUG_LOG is enabled."""
+    if DEBUG_LOG:
+        print("[PARTITION_REWARD_DEBUG]", *args, **kwargs)
+
 # ──────────────────────────────────────────────────────────────────────────────
 # CONFIG – adjust HOSTNAME if needed
 # ──────────────────────────────────────────────────────────────────────────────
-HOSTNAME    = os.environ["VLLM_SERVER_HOSTNAME"] 
-NUM_SERVERS  = 8
+def get_hostname():
+    """Get the actual hostname for connecting to vLLM server.
+
+    Ray workers may not be able to use 'localhost' to connect to services
+    running in the parent process or Apptainer containers. We need to use
+    the actual hostname or IP address.
+    """
+    import socket
+
+    # First, try environment variable
+    env_hostname = os.environ.get("VLLM_SERVER_HOSTNAME", "")
+    if env_hostname and env_hostname != "localhost":
+        return env_hostname
+
+    # If env var is not set or is 'localhost', try to get the actual hostname
+    try:
+        # Get the fully qualified domain name
+        hostname = socket.getfqdn()
+        # If FQDN doesn't work, get the short hostname
+        if hostname == "localhost" or not hostname:
+            hostname = socket.gethostname()
+        return hostname
+    except Exception as e:
+        print(f"[PARTITION_REWARD_DEBUG] Warning: Could not determine hostname: {e}")
+        # Fall back to localhost as last resort
+        return "localhost"
+
+HOSTNAME = get_hostname()
+debug_print(f"Using HOSTNAME for vLLM connection: {HOSTNAME}")
+
+# Use single server for retrieval experiments (can be scaled up if more GPUs available)
+NUM_SERVERS  = int(os.environ.get("VLLM_NUM_SERVERS", "1"))
+VLLM_BASE_PORT = int(os.environ.get("VLLM_CLASSIFIER_PORT", "8000"))
 SERVER_CFGS  = [
-    {"url": f"http://{HOSTNAME}:{8000+i}", "model": f"similarity_gpu_{i}"}
+    {"url": f"http://{HOSTNAME}:{VLLM_BASE_PORT+i}", "model": f"similarity_gpu_{i}"}
     for i in range(NUM_SERVERS)
 ]
 
-THRESHOLD = 0.5        # decision boundary: “similar” if prob > 0.45
+debug_print(f"Server configurations: {SERVER_CFGS}")
+
+THRESHOLD = 0.5        # decision boundary: "similar" if prob > 0.45
 MAX_LEN   = 4096                   # token budget for CLS + s1 + SEP + s2 + SEP
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -82,47 +123,61 @@ async def remote_similarity_prob(s1: str, s2: str, cfg: Dict) -> float:
         "input": [build_input_ids(s1, s2, tokenize=False)],
     }
 
-    
+    debug_print(f"Calling /classify endpoint at {cfg['url']}")
+    debug_print(f"Payload: {payload}")
+
     max_retries = 3
     retry_delay = 1.0  # Initial delay in seconds
-    
+
     for attempt in range(max_retries):
         try:
             # Get a client - may be cached or new
             client = get_client(cfg["url"])
-            
+
             try:
+                debug_print(f"Attempt {attempt+1}/{max_retries}: POST {cfg['url']}/classify")
                 resp = await client.post("/classify", json=payload)
+                debug_print(f"Response status: {resp.status_code}")
+                debug_print(f"Response headers: {dict(resp.headers)}")
                 resp.raise_for_status()
-                
-                #print(resp.json())  # Debugging output
-                prob = resp.json()["data"][0]["probs"]
-                #print(f"payload: {payload}")  # Debugging output
-                #print(f"Logits: {logits}")  # Debugging output
+
+                response_json = resp.json()
+                debug_print(f"Response JSON: {response_json}")
+                prob = response_json["data"][0]["probs"]
+                debug_print(f"Extracted probability: {prob[-1]}")
                 return prob[-1]
                 
-            except (httpx.HTTPError, httpx.TimeoutException, httpx.ConnectError, 
+            except (httpx.HTTPError, httpx.TimeoutException, httpx.ConnectError,
                     httpx.ReadError, RuntimeError) as e:
+                debug_print(f"HTTP error occurred: {type(e).__name__}: {str(e)}")
+                if hasattr(e, 'response') and e.response is not None:
+                    debug_print(f"Error response status: {e.response.status_code}")
+                    debug_print(f"Error response body: {e.response.text}")
+
                 # If we get a connection error or the "TCPTransport closed" runtime error
                 if "TCPTransport closed" in str(e) or isinstance(e, (httpx.ConnectError, httpx.ReadError)):
+                    debug_print("Connection error detected, clearing client cache")
                     # Clear the cache entry for this URL and create a new client
                     get_client.cache_clear()
                     if attempt < max_retries - 1:  # Not the last attempt
                         continue  # Try again with a new client
-                
+
                 # For other errors, follow normal retry logic
                 if attempt == max_retries - 1:
                     raise
-                    
+
                 wait_time = retry_delay * (2 ** attempt)
                 print(f"Request failed (attempt {attempt+1}/{max_retries}): {str(e)}. Retrying in {wait_time:.2f}s...")
+                debug_print(f"Waiting {wait_time:.2f}s before retry...")
                 await asyncio.sleep(wait_time)
-                
+
         except Exception as e:
+            debug_print(f"Unexpected error: {type(e).__name__}: {str(e)}")
             if attempt == max_retries - 1:
                 raise
             wait_time = retry_delay * (2 ** attempt)
             print(f"Unexpected error (attempt {attempt+1}/{max_retries}): {str(e)}. Retrying in {wait_time:.2f}s...")
+            debug_print(f"Waiting {wait_time:.2f}s before retry...")
             await asyncio.sleep(wait_time)
 
 # ──────────────────────────────────────────────────────────────────────────────

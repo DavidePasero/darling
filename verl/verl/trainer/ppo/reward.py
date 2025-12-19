@@ -47,7 +47,11 @@ def get_custom_reward_fn(config, diversity=False):
 
 
 def load_reward_manager(config, tokenizer, num_examine, diversity=False, **reward_kwargs):
-    reward_manager_name = config.reward_model.get("reward_manager", "naive")
+    if diversity:
+        reward_manager_name = config.reward_model.get("diversity_reward_manager", "diversity")
+    else:
+        reward_manager_name = config.reward_model.get("reward_manager", "naive")
+    
     if reward_manager_name == "naive":
         from verl.workers.reward_manager import NaiveRewardManager
 
