@@ -1,12 +1,12 @@
 #!/bin/bash
-#SBATCH --job-name=alessio_beir_retrieval
+#SBATCH --job-name=BEIR_RETR
 #SBATCH --partition=gpu_h100
 #SBATCH --nodes=1
 #SBATCH --gpus-per-node=2
 #SBATCH --cpus-per-task=16
 #SBATCH --time=24:00:00
-#SBATCH --output=logs/alessio_beir_retrieval_%j.out
-#SBATCH --error=logs/alessio_beir_retrieval_%j.err
+#SBATCH --output=logs/beir_retrieval_%j.out
+#SBATCH --error=logs/beir_retrieval_%j.err
 
 ##############################
 # CONFIGURATION
@@ -14,7 +14,7 @@
 CHECKPOINT_DIR=/home/scur1900/scratch-shared/checkpoints
 
 # BEIR Dataset Configuration (from train_retrieval_beir.sh)
-BEIR_DATASET="msmarco"
+BEIR_DATASET="fiqa"
 BEIR_DIR="/home/scur1900/scratch_shared/${BEIR_DATASET}"
 QUERIES_FILE="${BEIR_DIR}/queries.jsonl"
 TRAIN_QRELS="${BEIR_DIR}/qrels/train.tsv"
@@ -34,20 +34,24 @@ BM25_B=0.4
 # test_gen_batch meta info: {'eos_token_id': 151645, 'pad_token_id': 151643, 'recompute_log_prob': False, 'do_sample': True, 'validate': True}
 # 2025-12-13 02:15:31
 # validation generation end.  and it is bascally going forever so we had to stop the run. WHy does this happen?
-BM25_NUM_THREADS=64  # Number of parallel search threads for BM25 (can be higher than CPU cores for I/O-bound tasks)
+BM25_NUM_THREADS=128  # Number of parallel search threads for BM25 (can be higher than CPU cores for I/O-bound tasks)
 
 # Model Configuration
 MODEL_PATH="Qwen/Qwen2.5-0.5B-Instruct"
 BATCH_SIZE=256
-N_REWRITES=6
+N_REWRITES=10
 MAX_PROMPT_LEN=256
 MAX_RESPONSE_LEN=512
 LEARNING_RATE=1e-6
-EPOCHS=100
+EPOCHS=500
 
 # Reward Configuration
 QUALITY_METHOD="ndcg"
-K=20
+K=10
+
+# FAISS Performance Configuration
+NPROBE=8                     # Number of clusters to probe (lower=faster, 8-16 recommended for GPU)
+ENCODING_BATCH_SIZE=512      # Batch size for embedding encoding (larger=better GPU utilization)
 
 # Logging Configuration
 LOG_REWRITE_FREQ=50          # Log rewrites every N steps
@@ -202,6 +206,8 @@ if [ "${RETRIEVER_TYPE}" = "faiss" ]; then
         "+reward_model.embedding_mode=vllm"
         "+reward_model.vllm_server_url=http://localhost:8001"
         "+reward_model.faiss_device=cuda"
+        "+reward_model.nprobe=${NPROBE}"
+        "+reward_model.encoding_batch_size=${ENCODING_BATCH_SIZE}"
     )
 else
     RETRIEVER_ARGS=(
@@ -272,8 +278,8 @@ python3 -m verl.trainer.main_ppo \
     trainer.experiment_name=${EXPERIMENT_NAME} \
     trainer.n_gpus_per_node=2 \
     trainer.nnodes=1 \
-    trainer.save_freq=5 \
-    trainer.test_freq=1 \
+    trainer.save_freq=250 \
+    trainer.test_freq=0 \
     +trainer.log_rewrite_freq=${LOG_REWRITE_FREQ} \
     +trainer.log_num_queries=${LOG_NUM_QUERIES} \
     +trainer.log_num_rewrites=${LOG_NUM_REWRITES} \

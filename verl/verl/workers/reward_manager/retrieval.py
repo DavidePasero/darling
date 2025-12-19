@@ -4,6 +4,7 @@ import torch
 from verl import DataProto
 
 from verl.retrieval.engine.retriever import FaissRetriever
+from verl.retrieval.engine.faiss_client import FaissClient
 from verl.retrieval.engine.bm25_retriever import Bm25Retriever
 from verl.retrieval.engine.base_retriever import BaseRetriever
 from verl.retrieval.engine.document_dataset import UnifiedDataset, BeirAdapter
@@ -40,6 +41,9 @@ class RetrievalRewardManager:
         faiss_device="cpu",
         nprobe=16,
         encoding_batch_size=256,
+        search_batch_size=256,
+        use_faiss_server=False,
+        faiss_server_url=None,
         **kwargs
     ):
         """
@@ -65,6 +69,9 @@ class RetrievalRewardManager:
             faiss_device: Device for FAISS index (default: cpu)
             nprobe: Number of clusters to probe for FAISS search (default: 16)
             encoding_batch_size: Batch size for embedding encoding (default: 256)
+            search_batch_size: Batch size for FAISS index search (default: 256)
+            use_faiss_server: Use FastAPI server for FAISS search (default: False)
+            faiss_server_url: URL for FAISS server (required if use_faiss_server=True)
         """
         self.tokenizer = tokenizer
         self.num_examine = num_examine
@@ -80,6 +87,7 @@ class RetrievalRewardManager:
         self.retriever_type = retriever_type.lower()
         self.nprobe = nprobe
         self.encoding_batch_size = encoding_batch_size
+        self.search_batch_size = search_batch_size
 
         if beir_dataset_path is None:
             raise ValueError("beir_dataset_path must be provided")
@@ -91,20 +99,32 @@ class RetrievalRewardManager:
 
         # Initialize retriever based on type
         if self.retriever_type == "faiss":
-            if faiss_index_path is None:
-                raise ValueError("faiss_index_path must be provided for FAISS retriever")
+            if use_faiss_server:
+                if faiss_server_url is None:
+                    raise ValueError("faiss_server_url must be provided when use_faiss_server=True")
 
-            self.retriever = FaissRetriever(
-                faiss_index_path=faiss_index_path,
-                embedding_model=embedding_model,
-                id_mapping_path=id_mapping_path,
-                device=device,
-                index_device=faiss_device,
-                embedding_mode=embedding_mode,
-                vllm_server_url=vllm_server_url,
-                max_seq_len=512,
-                verbose=True
-            )
+                print(f"Using FAISS server mode: {faiss_server_url}")
+                self.retriever = FaissClient(
+                    server_url=faiss_server_url,
+                    timeout=300.0,
+                    verbose=True
+                )
+            else:
+                if faiss_index_path is None:
+                    raise ValueError("faiss_index_path must be provided for local FAISS retriever")
+
+                print(f"Using local FAISS retriever")
+                self.retriever = FaissRetriever(
+                    faiss_index_path=faiss_index_path,
+                    embedding_model=embedding_model,
+                    id_mapping_path=id_mapping_path,
+                    device=device,
+                    index_device=faiss_device,
+                    embedding_mode=embedding_mode,
+                    vllm_server_url=vllm_server_url,
+                    max_seq_len=512,
+                    verbose=True
+                )
 
         elif self.retriever_type == "bm25":
             if bm25_index_path is None:
@@ -171,7 +191,8 @@ class RetrievalRewardManager:
             responses_str,
             k=self.k,
             nprobe=self.nprobe,
-            batch_size=self.encoding_batch_size
+            batch_size=self.encoding_batch_size,
+            search_batch_size=self.search_batch_size
         )
         retrieved_doc_ids = self.retriever.map_indices_to_ids(indices)
 
@@ -183,7 +204,10 @@ class RetrievalRewardManager:
             reranker_url=self.reranker_url,
         )
 
-        debug_log = os.environ.get("DEBUG_LOG", "0") == "1"
+
+        # DIV_DEBUG_LOG is the primary flag for diversity-specific debugging
+        # Falls back to DEBUG_LOG for backward compatibility
+        debug_log = os.environ.get("DIV_DEBUG_LOG", os.environ.get("DEBUG_LOG", "0")) == "1"
         if debug_log:
             print("\n" + "=" * 100)
             print("DEBUG: RETRIEVAL REWARD COMPUTATION")

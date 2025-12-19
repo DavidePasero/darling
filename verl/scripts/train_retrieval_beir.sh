@@ -22,6 +22,10 @@ cd darling_${USER}/verl
 export PYTHONPATH="${PWD}:${PYTHONPATH}"
 pip install -e .
 
+# Fix MKL threading layer incompatibility with vLLM
+export MKL_THREADING_LAYER=GNU
+export MKL_SERVICE_FORCE_INTEL=1
+
 # Enable Ray debug mode for breakpoint debugging (set to 0 for production)
 export RAY_DEBUG_MODE=0
 

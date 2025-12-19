@@ -1190,7 +1190,9 @@ class RayPPOTrainer:
                             # but we still want to compute the reward using the rule-based reward function
                             reward_tensor_rm, reward_extra_infos_dict = compute_reward(batch, self.reward_fn)  # this is a tensor of shape (batch_size*n_rollouts, seq_len
 
-                        metrics.update({"actor/quality": torch.mean(reward_tensor_rm.sum(-1)).item()})
+                        quality_mean = torch.mean(reward_tensor_rm.sum(-1)).item()
+                        metrics.update({"actor/quality": quality_mean})
+                        print(f"[QUALITY_TRAINING] Step quality reward: {quality_mean:.4f}")
 
                         # this logs the number of all correct and all incorrect responses
                         if not self.use_rm:
@@ -1225,16 +1227,27 @@ class RayPPOTrainer:
                         else:
                             reward_tensor_rule, _ = compute_reward(batch, self.diversity_reward_fn)
 
-                        if self.config.reward_model.reward_manager == "diversity":
-                            metrics.update({"actor/diversity": torch.mean(reward_tensor_rule.sum(-1)).item()})
-                            
-                        
+                        # Log diversity reward if diversity_reward_fn is present
+                        if self.diversity_reward_fn is not None:
+                            diversity_mean = torch.mean(reward_tensor_rule.sum(-1)).item()
+                            metrics.update({"actor/diversity": diversity_mean})
+                            print(f"[DIVERSITY_TRAINING] Step diversity reward: {diversity_mean:.4f}")
+
+
                         lambda_rule_rescale = self.config.reward_model.lambda_rule_rescale if hasattr(self.config.reward_model, "lambda_rule_rescale") else 1.0
                         lambda_rm_rescale = self.config.reward_model.lambda_rm_rescale if hasattr(self.config.reward_model, "lambda_rm_rescale") else 1.0
 
                         # here regardless of the reward (model-based or rule-based), we name the quality reward as `reward_tensor_rm` and the diversity reward as `reward_tensor_rule`
                         # if diversity loss is set to 0.0 (lambda_rule_rescale == 0.0), we skip the code that combines the two rewards and only uses the model-based reward (reward_tensor_rm)
-                        if self.config.reward_model.reward_manager == "diversity" and lambda_rule_rescale != 0.0:
+                        # Check if diversity should be combined: either using diversity manager OR retrieval manager with diversity enabled
+                        use_diversity_reward = (
+                            (self.config.reward_model.reward_manager == "diversity" and lambda_rule_rescale != 0.0) or
+                            (self.config.reward_model.reward_manager == "retrieval" and
+                             self.config.reward_model.get("diversity_reward_manager") is not None and
+                             lambda_rule_rescale != 0.0)
+                        )
+
+                        if use_diversity_reward:
                             
                             normalize_reward_before_combine = self.config.reward_model.get("normalize_reward_before_combine", False)
                             multiplicative = self.config.reward_model.get("multiplicative", False)
@@ -1290,33 +1303,59 @@ class RayPPOTrainer:
 
                                 reward_tensor_rm = reward_tensor_rm * reward_tensor_rule
                                 reward_tensor = reward_tensor_rm.cpu().tolist()
-                                
+
                             else:
                                 reward_tensor_rm = reward_tensor_rm * lambda_rm_rescale
                                 reward_tensor_rule = reward_tensor_rule * lambda_rule_rescale
                                 reward_tensor = [a + b for a, b in zip(reward_tensor_rm.cpu().tolist(), reward_tensor_rule.cpu().tolist())]
 
-                            if os.environ.get("DEBUG_LOG", "0") == "1":
-                                print("\n" + "=" * 80)
-                                print("DEBUG: REWARD COMBINATION")
-                                print("=" * 80)
-                                
-                                rm_sum = reward_tensor_rm.sum(-1).cpu().numpy() if isinstance(reward_tensor_rm, torch.Tensor) else np.array([sum(r) for r in reward_tensor_rm])
-                                rule_sum = reward_tensor_rule.sum(-1).cpu().numpy() if isinstance(reward_tensor_rule, torch.Tensor) else np.array([sum(r) for r in reward_tensor_rule])
+                            # DIV_DEBUG_LOG: Enhanced logging for diversity reward debugging
+                            div_debug_log = os.environ.get("DIV_DEBUG_LOG", "0") == "1"
+                            if div_debug_log or os.environ.get("DEBUG_LOG", "0") == "1":
+                                print("\n" + "=" * 100)
+                                print("DIVERSITY REWARD DEBUG: REWARD COMBINATION")
+                                print("=" * 100)
+
+                                # Calculate reward sums before and after scaling
+                                rm_sum_original = reward_tensor_rm.sum(-1).cpu().numpy() if isinstance(reward_tensor_rm, torch.Tensor) else np.array([sum(r) for r in reward_tensor_rm])
+                                rule_sum_original = reward_tensor_rule.sum(-1).cpu().numpy() if isinstance(reward_tensor_rule, torch.Tensor) else np.array([sum(r) for r in reward_tensor_rule])
                                 combined_sum = np.array([sum(r) for r in reward_tensor])
-                                
-                                print(f"Mode: {'Multiplicative' if multiplicative else 'Additive'}")
-                                print(f"Quality scale: {lambda_rm_rescale}")
-                                print(f"Diversity scale: {lambda_rule_rescale}")
-                                print(f"\nSample rewards (first 5):")
-                                for i in range(min(5, len(rm_sum))):
-                                    print(f"  [{i}] Quality: {rm_sum[i]:.4f}, Diversity: {rule_sum[i]:.4f}, Combined: {combined_sum[i]:.4f}")
-                                
-                                print(f"\nBatch statistics:")
-                                print(f"  Quality:   mean={rm_sum.mean():.4f}, std={rm_sum.std():.4f}")
-                                print(f"  Diversity: mean={rule_sum.mean():.4f}, std={rule_sum.std():.4f}")
-                                print(f"  Combined:  mean={combined_sum.mean():.4f}, std={combined_sum.std():.4f}")
-                                print("=" * 80 + "\n")
+
+                                print(f"Reward Manager: {self.config.reward_model.reward_manager}")
+                                print(f"Diversity Manager: {self.config.reward_model.get('diversity_reward_manager', 'N/A')}")
+                                print(f"Combination Mode: {'Multiplicative' if multiplicative else 'Additive'}")
+                                print(f"Quality Reward Scale (lambda_rm): {lambda_rm_rescale}")
+                                print(f"Diversity Reward Scale (lambda_rule): {lambda_rule_rescale}")
+
+                                print(f"\nQuality Reward Statistics (from {self.config.reward_model.reward_manager}):")
+                                print(f"  Mean: {rm_sum_original.mean():.4f}, Std: {rm_sum_original.std():.4f}")
+                                print(f"  Min: {rm_sum_original.min():.4f}, Max: {rm_sum_original.max():.4f}")
+
+                                print(f"\nDiversity Reward Statistics (method: {self.config.reward_model.get('diversity_method', 'N/A')}):")
+                                print(f"  Mean: {rule_sum_original.mean():.4f}, Std: {rule_sum_original.std():.4f}")
+                                print(f"  Min: {rule_sum_original.min():.4f}, Max: {rule_sum_original.max():.4f}")
+
+                                print(f"\nCombined Reward Statistics:")
+                                print(f"  Mean: {combined_sum.mean():.4f}, Std: {combined_sum.std():.4f}")
+                                print(f"  Min: {combined_sum.min():.4f}, Max: {combined_sum.max():.4f}")
+
+                                print(f"\nSample Rewards (first 5 responses):")
+                                for i in range(min(5, len(rm_sum_original))):
+                                    if multiplicative:
+                                        print(f"  [{i}] Quality: {rm_sum_original[i]:.4f} × Diversity: {rule_sum_original[i]:.4f} = Combined: {combined_sum[i]:.4f}")
+                                    else:
+                                        print(f"  [{i}] Quality: {rm_sum_original[i]:.4f} + Diversity: {rule_sum_original[i]:.4f} = Combined: {combined_sum[i]:.4f}")
+
+                                print("=" * 100 + "\n")
+
+                            # Log quality and diversity rewards to wandb
+                            if self.config.reward_model.reward_manager == "retrieval":
+                                quality_mean = torch.mean(reward_tensor_rm.sum(-1) if isinstance(reward_tensor_rm, torch.Tensor) else torch.tensor([sum(r) for r in reward_tensor_rm])).item()
+                                metrics.update({"actor/quality_reward": quality_mean})
+
+                            # Log combined reward
+                            combined_mean = np.mean([sum(r) for r in reward_tensor])
+                            metrics.update({"actor/combined_reward": combined_mean})
 
                         else: 
                             reward_tensor = reward_tensor_rm

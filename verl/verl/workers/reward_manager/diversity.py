@@ -1,8 +1,19 @@
+import os
 from collections import defaultdict
 import numpy as np
 import torch
 
 from verl import DataProto
+
+# Debug logging control
+# DIV_DEBUG_LOG is the primary flag for diversity-specific debugging
+# Falls back to DEBUG_LOG for backward compatibility
+DIV_DEBUG_LOG = os.environ.get("DIV_DEBUG_LOG", os.environ.get("DEBUG_LOG", "0")) == "1"
+
+def debug_print(*args, **kwargs):
+    """Print debug messages only if DIV_DEBUG_LOG or DEBUG_LOG is enabled."""
+    if DIV_DEBUG_LOG:
+        print("[DIVERSITY_MANAGER_DEBUG]", *args, **kwargs)
 
 
 class DiversityRewardManager:
@@ -102,6 +113,15 @@ class DiversityRewardManager:
                 already_printed[data_source] = already_printed.get(data_source, 0) + 1
 
         data.batch["acc"] = torch.tensor(rewards, dtype=torch.float32, device=prompt_ids.device)
+
+        # Log diversity reward statistics
+        if len(rewards) > 0:
+            mean_reward = np.mean(rewards)
+            min_reward = np.min(rewards)
+            max_reward = np.max(rewards)
+            std_reward = np.std(rewards)
+            print(f"[DIVERSITY_REWARD_MANAGER] Batch stats: mean={mean_reward:.4f}, std={std_reward:.4f}, min={min_reward:.4f}, max={max_reward:.4f}, n={len(rewards)}")
+            debug_print(f"Individual rewards: {rewards}")
 
         if return_dict:
             return {"reward_tensor": reward_tensor, "reward_extra_info": reward_extra_info}

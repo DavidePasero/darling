@@ -1,9 +1,20 @@
+import os
 import torch
 import functools
 from transformers import AutoModelForSequenceClassification, AutoTokenizer
 
 import asyncio
 from collections import defaultdict
+
+# Debug logging control
+# DIV_DEBUG_LOG is the primary flag for diversity-specific debugging
+# Falls back to DEBUG_LOG for backward compatibility
+DIV_DEBUG_LOG = os.environ.get("DIV_DEBUG_LOG", os.environ.get("DEBUG_LOG", "0")) == "1"
+
+def debug_print(*args, **kwargs):
+    """Print debug messages only if DIV_DEBUG_LOG or DEBUG_LOG is enabled."""
+    if DIV_DEBUG_LOG:
+        print("[NGRAM_DIVERSITY_DEBUG]", *args, **kwargs)
 
 
 # ngrams
@@ -80,7 +91,27 @@ async def ngram_async(**kwargs):
 # Synchronous wrapper for backward compatibility
 def ngram(**kwargs):
     """Synchronous wrapper that runs the async version."""
-    return asyncio.run(ngram_async(**kwargs))
+    import time
+
+    solution_str = kwargs.get("solution_str", [])
+    n = kwargs.get("n", 4)
+
+    debug_print(f"Starting ngram diversity computation for {len(solution_str)} responses with n={n}")
+    start_time = time.time()
+
+    rewards = asyncio.run(ngram_async(**kwargs))
+
+    elapsed_time = time.time() - start_time
+
+    # Calculate statistics
+    mean_reward = sum(rewards) / len(rewards) if rewards else 0.0
+    min_reward = min(rewards) if rewards else 0.0
+    max_reward = max(rewards) if rewards else 0.0
+
+    print(f"[NGRAM_DIVERSITY] Computed rewards in {elapsed_time:.2f}s: mean={mean_reward:.4f}, min={min_reward:.4f}, max={max_reward:.4f}, n={n}")
+    debug_print(f"Reward distribution: {rewards}")
+
+    return rewards
 
 # Partitions
 

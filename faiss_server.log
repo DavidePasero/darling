@@ -1,0 +1,32 @@
+/home/scur1900/.conda/envs/verlenv/lib/python3.10/site-packages/torch/cuda/__init__.py:61: FutureWarning: The pynvml package is deprecated. Please install nvidia-ml-py instead. If you did not install pynvml directly, please report this to the maintainers of the package that installed pynvml for you.
+  import pynvml  # type: ignore[import]
+WARNING:2025-12-19 16:43:23,675:Skipping import of cpp extensions due to incompatible torch version 2.6.0+cu124 for torchao version 0.14.1             Please see https://github.com/pytorch/ao/issues/2919 for more info
+/home/scur1900/.conda/envs/verlenv/lib/python3.10/site-packages/torch/cuda/__init__.py:61: FutureWarning: The pynvml package is deprecated. Please install nvidia-ml-py instead. If you did not install pynvml directly, please report this to the maintainers of the package that installed pynvml for you.
+  import pynvml  # type: ignore[import]
+WARNING: Using incubator modules: jdk.incubator.vector
+/gpfs/home4/scur1900/darling_lukas/verl/verl/retrieval/engine/faiss_server.py:58: DeprecationWarning: 
+        on_event is deprecated, use lifespan event handlers instead.
+
+        Read more about it in the
+        [FastAPI docs for Lifespan Events](https://fastapi.tiangolo.com/advanced/events/).
+        
+  @app.on_event("startup")
+INFO:     Started server process [103509]
+INFO:     Waiting for application startup.
+Loading ID mapping: /home/scur1900/scratch_shared/msmarco/faiss/id_mapping.pkl
+Loaded 527341 document IDs
+INFO:     Application startup complete.
+INFO:     Uvicorn running on http://0.0.0.0:8002 (Press CTRL+C to quit)
+INFO:     127.0.0.1:35426 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:36902 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:47846 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59468 - "POST /search HTTP/1.1" 200 OK
+INFO:     127.0.0.1:38688 - "POST /search HTTP/1.1" 200 OK
+INFO:     127.0.0.1:48746 - "POST /search HTTP/1.1" 200 OK
+INFO:     127.0.0.1:34630 - "POST /search HTTP/1.1" 200 OK
+INFO:     127.0.0.1:35446 - "POST /search HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60412 - "POST /search HTTP/1.1" 200 OK
+INFO:     127.0.0.1:34912 - "POST /search HTTP/1.1" 200 OK
+INFO:     127.0.0.1:42528 - "POST /search HTTP/1.1" 200 OK
+INFO:     127.0.0.1:36416 - "POST /search HTTP/1.1" 200 OK
+INFO:     127.0.0.1:50276 - "POST /search HTTP/1.1" 200 OK

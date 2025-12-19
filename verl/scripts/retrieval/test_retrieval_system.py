@@ -85,7 +85,8 @@ def test_retrieval(
     use_vllm: bool = False,
     vllm_port: int = 8000,
     num_rewrites: int = 1,
-    model_name: str = "darling_retrieval_bm25"
+    model_name: str = "darling_retrieval_bm25",
+    search_batch_size=128
 ):
     print(f"Testing {retriever_type.upper()} retrieval system")
     print(f"Dataset: {beir_dataset_path}")
@@ -159,7 +160,6 @@ def test_retrieval(
 
     start = time.time()
 
-    search_batch_size = 32 if use_vllm else 128
     all_retrieved_ids = []
 
     for i in range(0, len(sample_queries), search_batch_size):
@@ -255,10 +255,14 @@ def main():
 
     # Common arguments
     parser.add_argument("--device", default="cuda", choices=["cuda", "cpu"])
-    parser.add_argument("--k", type=int, default=10)
+    parser.add_argument("--k", type=int, default=20)
     parser.add_argument("--nprobe", type=int, default=64)
+    parser.add_argument("--search_batch_size", type=int, default=128)
 
     args = parser.parse_args()
+
+    print(f"Using top-k: {args.k}")
+    print("*"*80)
     
     if args.use_vllm and not args.vllm_port:
          print("Warning: --use-vllm set but no port provided. Using 8000.")
@@ -277,7 +281,8 @@ def main():
         use_vllm=args.use_vllm,
         vllm_port=args.vllm_port,
         num_rewrites=args.num_rewrites,
-        model_name=args.model_name
+        model_name=args.model_name,
+        search_batch_size=args.search_batch_size
     )
 
 if __name__ == "__main__":
