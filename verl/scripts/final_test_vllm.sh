@@ -20,7 +20,7 @@ export DEBUG_LOG=1
 CHECKPOINT_DIR=/home/scur1900/scratch_shared/merged_checkpoints
 LOGDIR="/home/scur1900/logs/vllm_eval"
 
-ACTOR_PATH=/home/scur1900/scratch_shared/scratch-shared-alisia/merged/global_step_250_llama_instruct/actor
+ACTOR_PATH=/home/scur1900/scratch_shared/merged_checkpoints/beir_retrieval/fiqa_bm25_ndcg@10_diversity/global_step_500/actor
 ACTOR_NAME=darling_trained_faiss
 
 VLLM_LOG="$LOGDIR/vllm_eval_actor_${SLURM_JOB_ID}.log"
@@ -47,11 +47,11 @@ for i in {1..120}; do
   sleep 2
 done
 
-DATASET_PATH=/home/scur1900/scratch_shared/fiqa
+DATASET_PATH=${HOME}/scratch_shared/fiqa
 
 python /home/scur1900/darling_davide/verl/scripts/test_retrieval_system.py \
  --beir-dataset $DATASET_PATH \
- --retriever-type faiss --device cuda --embedding-model "Qwen/Qwen3-Embedding-0.6B" \
+ --retriever-type bm25 --device cuda --embedding-model "Qwen/Qwen3-Embedding-0.6B" \
  --model-name $ACTOR_NAME \
  --use-vllm \
  --vllm-port $VLLM_PORT \
