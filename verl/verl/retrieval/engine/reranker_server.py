@@ -73,6 +73,9 @@ async def score(request: ScoreRequest):
 
         # Format response to match vLLM style
         data = [{"score": float(s), "index": i} for i, s in enumerate(scores)]
+
+        # Log scores
+        print ("[QUALITY SCORES]", data)
         return {"data": data}
 
     except Exception as e:

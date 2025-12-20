@@ -11,7 +11,7 @@
 ##############################
 # CONFIGURATION
 ##############################
-CHECKPOINT_DIR=/home/scur1900/scratch-shared/checkpoints
+CHECKPOINT_DIR=/home/scur1900/scratch_shared/sharded_checkpoints
 USER=davide
 
 # BEIR Dataset Configuration
@@ -58,7 +58,7 @@ CLASSIFIER_MODEL="/home/scur1900/models/dogtooth"
 PARTITION_REWARD_PATH="verl/verl/utils/reward_score/partition_reward_vllm_serve.py"
 
 # Reward Combination Configuration
-MULTIPLICATIVE=false
+MULTIPLICATIVE=true
 LAMBDA_RM=1.0
 LAMBDA_RULE=1.0
 
