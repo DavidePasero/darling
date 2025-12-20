@@ -142,7 +142,9 @@ class RetrievalRewardManager:
         else:
             raise ValueError(f"Unknown retriever_type: {retriever_type}. Must be 'faiss' or 'bm25'")
 
-        adapter = BeirAdapter(data_path=beir_dataset_path, split="train")
+        split = kwargs.get("split", "train")
+        adapter = BeirAdapter(data_path=beir_dataset_path, split=split)
+
         self.doc_dataset: UnifiedDataset = adapter.to_unified()
 
         print(f"Loaded {len(self.doc_dataset.qrels)} queries with relevance labels")

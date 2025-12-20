@@ -8,32 +8,39 @@ import requests
 
 
 class UnifiedDataset:
-    def __init__(self, queries: Dict[str, str], corpus: Dict[str, str], qrels: Dict[str, List[str]]):
-        self.queries = queries
-        self.corpus = corpus
-        self.qrels = qrels
+    def __init__(
+        self,
+        queries: Dict[str, str],        # query_id -> query_text
+        corpus: Dict[str, str],         # doc_id   -> doc_text
+        qrels: Dict[str, List[str]],    # query_id -> [doc_ids]
+    ):
+        self.queries = {str(k): v for k, v in queries.items()}
+        self.corpus = {str(k): v for k, v in corpus.items()}
+        self.qrels = {str(k): [str(d) for d in v] for k, v in qrels.items()}
+
+        # ---- sanity check (SAFE) ----
+        qid, qtext = next(iter(self.queries.items()))
+        print(f"[UnifiedDataset] example query_id={qid} ({type(qid)})")
+        print(f"[UnifiedDataset] example query_text='{qtext[:60]}'")
+
+        qid2, rels = next(iter(self.qrels.items()))
+        print(f"[UnifiedDataset] qrels for query_id={qid2}: {len(rels)} docs")
 
         self.max_k = 1000
-        # Convert to numpy array for faster indexing in batch operations
         self.idcg = np.array(self._precompute_idcg(self.max_k))
 
-    @staticmethod
-    def _precompute_idcg(max_k: int):
-        idcg = [0.0] * (max_k + 1)
-        s = 0.0
-        for i in range(max_k):
-            s += 1.0 / math.log2(i + 2)
-            idcg[i + 1] = s
-        return idcg
-
     def get_relevant_docs(self, query_id: str) -> List[str]:
-        return self.qrels.get(query_id, [])
+        return self.qrels.get(str(query_id), [])
+
+
 
     def compute_ndcg_batch(
-        self, query_uids: List[str], retrieved_doc_ids_batch: List[List[str]], k: int = 10
+        self,
+        query_uids: List[str],
+        retrieved_doc_ids_batch: List[List[str]],
+        k: int = 10,
     ) -> List[float]:
         rewards = []
-        # Pre-compute discounts for the maximum possible length k
         discounts = 1.0 / np.log2(np.arange(k) + 2)
 
         for query_id, docs in zip(query_uids, retrieved_doc_ids_batch):
@@ -43,21 +50,26 @@ class UnifiedDataset:
                 continue
 
             docs_k = docs[:k]
-            # Create binary relevance vector
             relevance = np.array([1.0 if d in rel_docs else 0.0 for d in docs_k])
+            dcg = np.sum(relevance * discounts[: len(relevance)])
 
-            # Compute DCG
-            # Handle case where docs_k length is less than k
-            current_discounts = discounts[: len(relevance)]
-            dcg = np.sum(relevance * current_discounts)
-
-            # Compute IDCG
             ideal_count = min(len(rel_docs), len(docs_k))
-            idcg_val = self.idcg[ideal_count]
+            idcg = self.idcg[ideal_count]
 
-            rewards.append(dcg / idcg_val if idcg_val > 0 else 0.0)
+            rewards.append(dcg / idcg if idcg > 0 else 0.0)
 
         return rewards
+
+    def _precompute_idcg(self, max_k: int):
+        """
+        Precompute ideal DCG values for binary relevance.
+        idcg[n] = sum_{i=1..n} 1 / log2(i + 1)
+        """
+        idcg = [0.0]
+        for i in range(1, max_k + 1):
+            idcg.append(idcg[-1] + 1.0 / np.log2(i + 1))
+        return idcg
+
 
     def compute_recall_batch(
         self, query_uids: List[str], retrieved_doc_ids_batch: List[List[str]], k: int = 10

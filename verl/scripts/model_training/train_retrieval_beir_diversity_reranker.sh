@@ -12,7 +12,7 @@
 # CONFIGURATION
 ##############################
 CHECKPOINT_DIR=/home/scur1900/scratch-shared/checkpoints
-USER=davide
+USER=davide_copy 
 
 # BEIR Dataset Configuration
 BEIR_DATASET="msmarco"
