@@ -62,13 +62,9 @@ def main():
         faiss_nlist=args.nlist,
         faiss_m=args.m,
         batch_size=args.batch_size,
-<<<<<<< HEAD:verl/scripts/build_beir_faiss_index.py
         bm25_threads=args.bm25_threads,
-        device=args.device
-=======
         device=args.device,
-        max_docs=args.max_docs
->>>>>>> 6b374a5c2cc7b0f85e18901768aed138fa61c3b8:verl/scripts/retrieval/build_beir_faiss_index.py
+        max_docs=args.max_docs,
     )
 
 if __name__ == "__main__":

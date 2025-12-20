@@ -15,7 +15,7 @@ CHECKPOINT_DIR=/home/scur1900/scratch_shared/sharded_checkpoints
 USER=davide
 
 # BEIR Dataset Configuration
-BEIR_DATASET="msmarco"
+BEIR_DATASET="fiqa"
 BEIR_DIR="/home/scur1900/scratch_shared/${BEIR_DATASET}"
 QUERIES_FILE="${BEIR_DIR}/queries.jsonl"
 TRAIN_QRELS="${BEIR_DIR}/qrels/train.tsv"

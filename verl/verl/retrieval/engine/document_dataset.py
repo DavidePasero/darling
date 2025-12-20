@@ -14,6 +14,9 @@ class UnifiedDataset:
         self.qrels = qrels
 
         self.max_k = 1000
+        qs = queries.items()
+        print(f"query_id {qs[0][0]} is of type {type(qs[0][0])}")
+        print(f"query_id {qs[0][1]} is of type {type(qs[0][1])}")
         # Convert to numpy array for faster indexing in batch operations
         self.idcg = np.array(self._precompute_idcg(self.max_k))
 
@@ -137,7 +140,7 @@ class UnifiedDataset:
             doc_counts.append(count)
 
         if not queries_txt:
-            raise ValueError("Queries do not have a text")
+            raise ValueError("Queries do not have text")
 
         # 2. Payload Construction
         payload = {"text_1": queries_txt, "text_2": docs_txt, "normalize": True}
